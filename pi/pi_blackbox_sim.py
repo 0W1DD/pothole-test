@@ -118,6 +118,38 @@ def find_location(t_event):
     return TEST_LAT + random.uniform(-0.002, 0.002), TEST_LON + random.uniform(-0.002, 0.002), "테스트좌표"
 
 
+# ---------------- 실차 기록 위치 (그날 기록엔 GPS가 비어서 지도로 추정) ----------------
+# 7공 출발 → 시계방향 한바퀴 약 1.5km. 위쪽길 방지턱 4개를 지난 Enter 시각으로 맞춤 (2026-11 확인)
+ROUTE = [(36.85102, 127.148279), (36.85135, 127.148591), (36.851541, 127.148927), (36.851614, 127.149685), (36.851449, 127.150778), (36.851429, 127.15195), (36.851383, 127.152614), (36.850855, 127.152746), (36.850842, 127.153277), (36.850756, 127.155308), (36.849799, 127.155425), (36.849984, 127.154527), (36.849766, 127.153277), (36.849753, 127.151637), (36.850591, 127.151833), (36.850756, 127.150934), (36.850835, 127.149763), (36.85104, 127.148669), (36.85102, 127.148279)]
+# (기록 시작부터 초, 몇바퀴째 위치(0~2)) : 방지턱 지난 시각들
+ROUTE_ANCHORS = [(0, 0.0), (88, 0.0515), (101, 0.1588), (146, 0.2268), (164, 0.3041), (418, 1.0515), (430, 1.1588), (461, 1.2268), (481, 1.3041)]
+
+
+def route_pos(t):
+    """기록 시작부터 t초에 차가 있었던 위치 (경로따라 시간비례로 추정)"""
+    import math as _m
+    seg = [0.0]
+    for a, b in zip(ROUTE, ROUTE[1:]):
+        seg.append(seg[-1] + _m.dist(a, b))
+    L = seg[-1]
+    a_ = ROUTE_ANCHORS
+    if t >= a_[-1][0]:
+        (t1, s1), (t2, s2) = a_[4], a_[-1]
+        lap = s2 + (s2 - s1) / (t2 - t1) * (t - t2)
+    else:
+        for (t1, s1), (t2, s2) in zip(a_, a_[1:]):
+            if t1 <= t <= t2:
+                lap = s1 + (s2 - s1) * (t - t1) / (t2 - t1)
+                break
+    s = (lap % 1.0) * L
+    for i in range(len(ROUTE) - 1):
+        if seg[i] <= s <= seg[i + 1]:
+            f = (s - seg[i]) / (seg[i + 1] - seg[i])
+            (la1, lo1), (la2, lo2) = ROUTE[i], ROUTE[i + 1]
+            return la1 + (la2 - la1) * f, lo1 + (lo2 - lo1) * f
+    return ROUTE[0]
+
+
 # ---------------- 사진 ----------------
 def take_photo(t_event):
     os.makedirs(os.path.join(HERE, "sim_photos"), exist_ok=True)
@@ -137,9 +169,9 @@ def take_photo(t_event):
 
 
 # ---------------- 감지되면 ----------------
-def on_event(ev, t_event):
+def on_event(ev, t_event, loc=None):
     print(f"\n★ 충격감지! 점수 {ev.score_mg/1000:.2f}g (기준 {ev.threshold_mg/1000:.2f}g), 사진은 {ev.photo_back_ms}ms 전 프레임")
-    lat, lon, src = find_location(t_event)
+    lat, lon, src = loc if loc else find_location(t_event)
     print(f"    위치 {lat:.6f}, {lon:.6f} ← {src}")
     photo, psrc = take_photo(t_event)
     img_url = sb_upload_image(photo) if photo else None
@@ -218,7 +250,8 @@ def run_replay(path, speedup, dry, only_bumps):
         else:
             false_alarm += 1
         if not dry and (b or not only_bumps):
-            on_event(ev, time.time())
+            la, lo = route_pos(t)
+            on_event(ev, time.time(), (la, lo, f"실차경로 추정 ({t:.0f}초 지점)"))
     mins = (float(rows[-1]["t"]) - t_first) / 60
     print("\n===== 판별 요약 =====")
     print(f"  주행 {mins:.1f}분, 감지 {len(found)}번")

@@ -1,3 +1,5 @@
 node_modules/
 *.apk
 .DS_Store
+server.json
+sim_photos/

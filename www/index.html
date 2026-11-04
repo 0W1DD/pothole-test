@@ -215,7 +215,9 @@ async function sbInsert(table, row){
   const url = ($("sburl").value || store.get("sburl")).trim().replace(/\/+$/,""), key = ($("sbkey").value || store.get("sbkey")).trim();
   if (!url || !key) throw new Error("URL/키 없음");
   const r = await fetch(`${url}/rest/v1/${table}`, { method: "POST",
-    headers: { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json", Prefer: "return=minimal" },
+    // 새 키(sb_publishable_)는 apikey 헤더만, 옛날 anon 키(eyJ...)는 Authorization 도 같이
+    headers: Object.assign({ apikey: key, "Content-Type": "application/json", Prefer: "return=minimal" },
+                           key.startsWith("eyJ") ? { Authorization: "Bearer " + key } : {}),
     body: JSON.stringify(row) });
   if (!r.ok) { let m = ""; try { m = (await r.json()).message || ""; } catch(_){}
     throw new Error(table + " " + r.status + (m ? " " + m : "")); }

@@ -6,6 +6,8 @@
   python3 pi_blackbox_sim.py key                     Enter 칠때마다 가짜 충격 (센서 없을때)
   python3 pi_blackbox_sim.py replay calib_normal.csv 실차로 기록한 진짜 흔들림을 다시 흘려보냄 (빨리감기 10배)
   python3 pi_blackbox_sim.py replay calib_normal.csv --x 1   실제 속도로
+  python3 pi_blackbox_sim.py replay calib_normal.csv --dry  서버 안올리고 판별결과만 바로 (방지턱 맞췄는지, 오감지 몇번)
+  python3 pi_blackbox_sim.py replay calib_normal.csv --only-bumps  방지턱 근처 감지만 지도에 올림 (핀 13개 이하)
 
 처음 한번: 같은 폴더에 server.json 만들기 (깃허브에 올리지말기)
   {"url": "https://dwejbbhrjfcqcnslheas.supabase.co", "key": "sb_publishable_..."}
@@ -181,25 +183,49 @@ def run_key():
 
 
 # ---------------- 모드2: 기록된 실차 데이터 다시 흘리기 ----------------
-def run_replay(path, speedup):
+def run_replay(path, speedup, dry, only_bumps):
+    """dry: 서버에 안올리고 판별결과만 / only_bumps: Enter 표시한 방지턱 근처 감지만 올림"""
     import csv
     d = make_detector()
     rows = list(csv.DictReader(open(path)))
-    print(f"{path} {len(rows)}줄을 {speedup}배속으로 SDK에 넣음 (끝: Ctrl+C)")
+    marks = []
+    mp = os.path.join(os.path.dirname(os.path.abspath(path)), "calib_normal_marks.json")
+    if os.path.exists(mp):
+        marks = json.load(open(mp))
+    near = lambda t: next((i for i, m in enumerate(marks, 1) if m - 8 <= t <= m + 3), None)  # Enter 늦게 눌러서 앞 8초까지
+    print(f"{path} {len(rows)}줄, 방지턱표시 {len(marks)}개" + (" | 서버 안올림(dry)" if dry else ""))
     t_first = float(rows[0]["t"])
     start = time.time()
+    found, hit_bumps, false_alarm = [], set(), 0
     for r in rows:
         t = float(r["t"]) - t_first
-        lag = t / speedup - (time.time() - start)
-        if lag > 0.002:
-            time.sleep(lag)
+        if not dry:
+            lag = t / speedup - (time.time() - start)
+            if lag > 0.002:
+                time.sleep(lag)
         kmh = r.get("kmh")
         d.set_speed(kmh=float(kmh) if kmh not in (None, "", "nan") else None)
         res, ev = d.feed(int(t * 1000), pothole.g_to_mg(float(r["x"])),
                          pothole.g_to_mg(float(r["y"])), pothole.g_to_mg(float(r["z"])))
-        if res == pothole.EVENT:
+        if res != pothole.EVENT:
+            continue
+        b = near(t)
+        tag = f"방지턱 {b}번" if b else "방지턱 아님(오감지 후보)"
+        print(f"  {t:6.1f}초  충격 {ev.score_mg/1000:.2f}g  → {tag}")
+        found.append(t)
+        if b:
+            hit_bumps.add(b)
+        else:
+            false_alarm += 1
+        if not dry and (b or not only_bumps):
             on_event(ev, time.time())
-    print("끝")
+    mins = (float(rows[-1]["t"]) - t_first) / 60
+    print("\n===== 판별 요약 =====")
+    print(f"  주행 {mins:.1f}분, 감지 {len(found)}번")
+    if marks:
+        miss = [i for i in range(1, len(marks) + 1) if i not in hit_bumps]
+        print(f"  방지턱 {len(marks)}개 중 {len(hit_bumps)}개 감지, 놓친것 {miss}")
+        print(f"  방지턱 아닌데 감지 {false_alarm}번 (1분에 {false_alarm/mins:.2f}번) → 사진(YOLO)으로 거를 대상")
 
 
 if __name__ == "__main__":
@@ -208,7 +234,7 @@ if __name__ == "__main__":
     try:
         if mode == "replay":
             x = float(sys.argv[sys.argv.index("--x") + 1]) if "--x" in sys.argv else 10.0
-            run_replay(sys.argv[2], x)
+            run_replay(sys.argv[2], x, "--dry" in sys.argv, "--only-bumps" in sys.argv)
         else:
             run_key()
     except KeyboardInterrupt:

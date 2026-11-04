@@ -32,6 +32,7 @@ import requests
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "02_sdk", "python"))
+sys.path.insert(0, HERE)                          # pothole.py 를 같은폴더에 둬도 됨
 import pothole  # noqa: E402  우리 SDK (C라이브러리 있으면 C, 없으면 똑같은 파이썬버전)
 
 CAM_URL = "http://10.194.36.252:8080/shot.jpg"   # 폰 IP Webcam 주소 (안쓰면 그냥 둬도됨)

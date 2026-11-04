@@ -23,6 +23,7 @@ button:disabled{opacity:.4}
 .bar i{display:block;height:100%;background:var(--accent);width:0}
 .bar b{position:absolute;top:-3px;width:2px;height:16px;background:var(--warn)}
 label{font-size:13px;color:var(--sub)}
+#sburl,#sbkey{font:inherit;font-size:13px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
 input[type=number]{width:80px;font:inherit;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
 table{width:100%;border-collapse:collapse;font-size:13px}
 td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left}
@@ -42,6 +43,16 @@ textarea{width:100%;min-height:70px;font:inherit;font-size:13px;border-radius:8p
     <button id="stop" class="alt" disabled>멈춤</button>
   </div>
   <p class="k" id="status" style="margin:10px 0 0">대기중. 폰을 거치대에 고정하고 시작하세요.</p>
+</div>
+
+<div class="card">
+  <strong>서버(Supabase) 연결</strong>
+  <p class="k">Project URL과 anon(publishable) 키를 넣고 저장하세요. 키는 이 폰에만 저장돼요. service_role 키는 절대 넣지 마세요.</p>
+  <input id="sburl" placeholder="https://xxxx.supabase.co" style="width:100%;margin-bottom:6px">
+  <input id="sbkey" placeholder="anon 또는 publishable 키" style="width:100%;margin-bottom:6px">
+  <label style="display:block;margin:4px 0"><input type="checkbox" id="topot"> potholes 테이블(지도)에도 올리기</label>
+  <div class="row"><button class="alt" id="sbsave">저장</button><button class="alt" id="sbtest">지금 위치로 테스트 업로드</button></div>
+  <p class="k" id="sbmsg" style="margin:8px 0 0"></p>
 </div>
 
 <div class="card" id="live">
@@ -95,8 +106,10 @@ function feed(t, ax, ay, az){                          // 입력 m/s²
     S.last = t;
     if (minK > 0 && (curKmh === null || curKmh < minK)) return score;
     const g = nearestGps(t);
-    events.unshift({ t, score, kmh: curKmh, lat: g && g.lat, lon: g && g.lon });
+    const ev = { t, score, kmh: curKmh, lat: g && g.lat, lon: g && g.lon, up: "" };
+    events.unshift(ev);
     renderEvents();
+    upload(ev);
     $("live").classList.remove("flash"); void $("live").offsetWidth; $("live").classList.add("flash");
     if (navigator.vibrate) navigator.vibrate(150);
   }
@@ -163,7 +176,7 @@ const maplink = (lat, lon) => lat != null ? `<a target="_blank" rel="noopener" h
 
 function renderEvents(){
   $("evn").textContent = events.length;
-  $("evs").innerHTML = events.map(e => `<tr><td>${fmt(e.t).slice(11)}</td><td>${(e.score/1000).toFixed(2)}g</td><td>${e.kmh!=null?e.kmh.toFixed(0):"-"}</td><td>${maplink(e.lat,e.lon)}</td></tr>`).join("");
+  $("evs").innerHTML = events.map(e => `<tr><td>${fmt(e.t).slice(11)}</td><td>${(e.score/1000).toFixed(2)}g</td><td>${e.kmh!=null?e.kmh.toFixed(0):"-"}</td><td>${maplink(e.lat,e.lon)} ${e.up||""}</td></tr>`).join("");
 }
 
 function download(){
@@ -185,6 +198,44 @@ function match(){
     return `<tr><td>${l}</td><td>${g ? maplink(g.lat, g.lon) + " (차이 " + Math.round(Math.abs(g.t-(t+off))/1000) + "초)" : "그 시간 GPS 기록 없음"}</td></tr>`;
   }).join("");
 }
+
+// ===== Supabase 업로드 (REST 직접 호출, 라이브러리 없음) =====
+const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch(_) { return ""; } },
+                set(k,v){ try { localStorage.setItem(k, v); } catch(_){} } };
+$("sburl").value = store.get("sburl"); $("sbkey").value = store.get("sbkey"); $("topot").checked = store.get("topot") === "1";
+$("sbsave").onclick = () => { store.set("sburl", $("sburl").value.trim().replace(/\/+$/,"")); store.set("sbkey", $("sbkey").value.trim());
+  store.set("topot", $("topot").checked ? "1" : "0"); $("sbmsg").textContent = "저장했어요."; };
+$("topot").onchange = () => store.set("topot", $("topot").checked ? "1" : "0");
+
+async function sbInsert(table, row){
+  const url = ($("sburl").value || store.get("sburl")).trim().replace(/\/+$/,""), key = ($("sbkey").value || store.get("sbkey")).trim();
+  if (!url || !key) throw new Error("URL/키 없음");
+  const r = await fetch(`${url}/rest/v1/${table}`, { method: "POST",
+    headers: { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify(row) });
+  if (!r.ok) { let m = ""; try { m = (await r.json()).message || ""; } catch(_){}
+    throw new Error(table + " " + r.status + (m ? " " + m : "")); }
+}
+async function upload(ev){
+  if (ev.lat == null) { ev.up = "· 위치없어 안올림"; renderEvents(); return; }
+  const msgs = [];
+  try { await sbInsert("gps_logs", { lat: ev.lat, lon: ev.lon }); msgs.push("gps_logs ✓"); }
+  catch (e) { msgs.push("gps_logs ✗(" + e.message + ")"); }
+  if ($("topot").checked) {
+    try { await sbInsert("potholes", { title: "자동 감지 테스트", status: "발견", latitude: ev.lat, longitude: ev.lon,
+            description: `폰 충격 ${(ev.score/1000).toFixed(2)}g, ${ev.kmh != null ? ev.kmh.toFixed(0) + "km/h" : "속도모름"}, ${fmt(ev.t)}` });
+          msgs.push("potholes ✓"); }
+    catch (e) { msgs.push("potholes ✗(" + e.message + ")"); }
+  }
+  ev.up = "· " + msgs.join(" "); renderEvents(); $("sbmsg").textContent = "마지막 업로드: " + msgs.join(" ");
+}
+$("sbtest").onclick = () => {
+  $("sbmsg").textContent = "위치 찾는중...";
+  navigator.geolocation.getCurrentPosition(p => {
+    const ev = { t: Date.now(), score: 0, kmh: null, lat: p.coords.latitude, lon: p.coords.longitude, up: "" };
+    events.unshift(ev); renderEvents(); upload(ev);
+  }, err => { $("sbmsg").textContent = "GPS 오류: " + err.message; }, { enableHighAccuracy: true, timeout: 15000 });
+};
 
 $("start").onclick = start; $("stop").onclick = stop; $("dl").onclick = download; $("match").onclick = match;
 </script>

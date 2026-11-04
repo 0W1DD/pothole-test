@@ -50,7 +50,8 @@ textarea{width:100%;min-height:70px;font:inherit;font-size:13px;border-radius:8p
   <p class="k">Project URL과 anon(publishable) 키를 넣고 저장하세요. 키는 이 폰에만 저장돼요. service_role 키는 절대 넣지 마세요.</p>
   <input id="sburl" placeholder="https://xxxx.supabase.co" style="width:100%;margin-bottom:6px">
   <input id="sbkey" placeholder="anon 또는 publishable 키" style="width:100%;margin-bottom:6px">
-  <label style="display:block;margin:4px 0"><input type="checkbox" id="topot"> potholes 테이블(지도)에도 올리기</label>
+  <label style="display:block;margin:4px 0"><input type="checkbox" id="topot" checked> 감지하면 potholes(지도 빨간 핀)에 올리기</label>
+  <label style="display:block;margin:4px 0"><input type="checkbox" id="live5" checked> 측정 중 내 위치를 5초마다 gps_logs로 보내기 (지도의 내 차 위치)</label>
   <div class="row"><button class="alt" id="sbsave">저장</button><button class="alt" id="sbtest">지금 위치로 테스트 업로드</button></div>
   <p class="k" id="sbmsg" style="margin:8px 0 0"></p>
 </div>
@@ -202,7 +203,10 @@ function match(){
 // ===== Supabase 업로드 (REST 직접 호출, 라이브러리 없음) =====
 const store = { get(k){ try { return localStorage.getItem(k) || ""; } catch(_) { return ""; } },
                 set(k,v){ try { localStorage.setItem(k, v); } catch(_){} } };
-$("sburl").value = store.get("sburl"); $("sbkey").value = store.get("sbkey"); $("topot").checked = store.get("topot") === "1";
+$("sburl").value = store.get("sburl"); $("sbkey").value = store.get("sbkey");
+if (store.get("topot")) $("topot").checked = store.get("topot") === "1";
+if (store.get("live5")) $("live5").checked = store.get("live5") === "1";
+$("live5").onchange = () => store.set("live5", $("live5").checked ? "1" : "0");
 $("sbsave").onclick = () => { store.set("sburl", $("sburl").value.trim().replace(/\/+$/,"")); store.set("sbkey", $("sbkey").value.trim());
   store.set("topot", $("topot").checked ? "1" : "0"); $("sbmsg").textContent = "저장했어요."; };
 $("topot").onchange = () => store.set("topot", $("topot").checked ? "1" : "0");
@@ -216,24 +220,35 @@ async function sbInsert(table, row){
   if (!r.ok) { let m = ""; try { m = (await r.json()).message || ""; } catch(_){}
     throw new Error(table + " " + r.status + (m ? " " + m : "")); }
 }
-async function upload(ev){
+async function upload(ev, alsoGps){
   if (ev.lat == null) { ev.up = "· 위치없어 안올림"; renderEvents(); return; }
   const msgs = [];
-  try { await sbInsert("gps_logs", { lat: ev.lat, lon: ev.lon }); msgs.push("gps_logs ✓"); }
-  catch (e) { msgs.push("gps_logs ✗(" + e.message + ")"); }
+  if (alsoGps) {
+    try { await sbInsert("gps_logs", { lat: ev.lat, lon: ev.lon }); msgs.push("gps_logs ✓"); }
+    catch (e) { msgs.push("gps_logs ✗(" + e.message + ")"); }
+  }
   if ($("topot").checked) {
     try { await sbInsert("potholes", { title: "자동 감지 테스트", status: "발견", latitude: ev.lat, longitude: ev.lon,
             description: `폰 충격 ${(ev.score/1000).toFixed(2)}g, ${ev.kmh != null ? ev.kmh.toFixed(0) + "km/h" : "속도모름"}, ${fmt(ev.t)}` });
           msgs.push("potholes ✓"); }
     catch (e) { msgs.push("potholes ✗(" + e.message + ")"); }
   }
-  ev.up = "· " + msgs.join(" "); renderEvents(); $("sbmsg").textContent = "마지막 업로드: " + msgs.join(" ");
+  ev.up = "· " + (msgs.join(" ") || "올릴곳 꺼짐"); renderEvents(); $("sbmsg").textContent = "마지막 업로드: " + (msgs.join(" ") || "-");
 }
+// 측정 중 5초마다 내 위치 → gps_logs (팀 웹 지도의 GPS 마커가 따라 움직임)
+let lastLive = 0;
+setInterval(async () => {
+  if (!S.running || !$("live5").checked || !gps.length) return;
+  const g = gps[gps.length - 1];
+  if (g.t === lastLive) return; lastLive = g.t;
+  try { await sbInsert("gps_logs", { lat: +g.lat.toFixed(6), lon: +g.lon.toFixed(6) }); $("gpsn").textContent = gps.length + "개 (전송✓)"; }
+  catch (e) { $("gpsn").textContent = gps.length + "개 (전송✗)"; }
+}, 5000);
 $("sbtest").onclick = () => {
   $("sbmsg").textContent = "위치 찾는중...";
   navigator.geolocation.getCurrentPosition(p => {
     const ev = { t: Date.now(), score: 0, kmh: null, lat: p.coords.latitude, lon: p.coords.longitude, up: "" };
-    events.unshift(ev); renderEvents(); upload(ev);
+    events.unshift(ev); renderEvents(); upload(ev, true);
   }, err => { $("sbmsg").textContent = "GPS 오류: " + err.message; }, { enableHighAccuracy: true, timeout: 15000 });
 };
 

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">포트홀 테스트</string>
+    <string name="title_activity_main">포트홀 테스트</string>
+    <string name="package_name">kr.ac.kongju.pothole</string>
+    <string name="custom_url_scheme">kr.ac.kongju.pothole</string>
+</resources>

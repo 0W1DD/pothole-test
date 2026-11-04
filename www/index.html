@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>포트홀 폰 테스트</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--ink:#1f2330;--sub:#6b6f7b;--accent:#4357d4;--warn:#e07b2a;--line:#e3e6ef}
+@media (prefers-color-scheme:dark){:root{--bg:#14161c;--card:#1d2029;--ink:#e8eaf0;--sub:#9aa0ae;--accent:#7f91ff;--warn:#ff9a4d;--line:#2c303b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;padding:16px;max-width:640px;margin-inline:auto}
+h1{font-size:20px;margin:4px 0 2px}
+p.s{color:var(--sub);font-size:13px;margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{font:inherit;border:0;border-radius:10px;padding:12px 16px;background:var(--accent);color:#fff;font-weight:600;min-height:44px}
+button.alt{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+button:disabled{opacity:.4}
+.big{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums}
+.k{font-size:12px;color:var(--sub)}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden;position:relative;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--accent);width:0}
+.bar b{position:absolute;top:-3px;width:2px;height:16px;background:var(--warn)}
+label{font-size:13px;color:var(--sub)}
+input[type=number]{width:80px;font:inherit;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left}
+a{color:var(--accent)}
+.flash{animation:f .8s}
+@keyframes f{from{background:var(--warn)}to{background:var(--card)}}
+textarea{width:100%;min-height:70px;font:inherit;font-size:13px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:8px}
+</style>
+</head>
+<body>
+<h1>포트홀 폰 테스트</h1>
+<p class="s">폰 가속도로 충격 감지(SDK와 같은 계산) + GPS 위치 기록 + 시간으로 위치 맞추기</p>
+
+<div class="card">
+  <div class="row">
+    <button id="start">측정 시작</button>
+    <button id="stop" class="alt" disabled>멈춤</button>
+  </div>
+  <p class="k" id="status" style="margin:10px 0 0">대기중. 폰을 거치대에 고정하고 시작하세요.</p>
+</div>
+
+<div class="card" id="live">
+  <div class="k">지금 충격점수 (g)</div>
+  <div class="big" id="score">0.00</div>
+  <div class="bar"><i id="fill"></i><b id="mark"></b></div>
+  <div class="grid" style="margin-top:12px">
+    <div><div class="k">센서 속도</div><div id="hz">-</div></div>
+    <div><div class="k">GPS 속도</div><div id="kmh">-</div></div>
+    <div><div class="k">GPS 기록</div><div id="gpsn">0개</div></div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <label>기준값(g) <input type="number" id="thr" value="0.20" step="0.01" min="0.05"></label>
+    <label>최소속도(km/h) <input type="number" id="minkmh" value="0" step="1" min="0"></label>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between"><strong>감지 기록 <span id="evn">0</span>개</strong>
+  <button class="alt" id="dl">CSV 저장</button></div>
+  <table><thead><tr><th>시간</th><th>점수</th><th>속도</th><th>위치</th></tr></thead><tbody id="evs"></tbody></table>
+</div>
+
+<div class="card">
+  <strong>블랙박스 시간 맞추기 테스트</strong>
+  <p class="k">GPS 없는 블랙박스(라즈베리파이)가 기록한 감지 시각을 붙여넣으면, 이 폰의 GPS 기록에서 같은 시간 위치를 찾아요. 한 줄에 하나, 예: 2026-11-04 09:12:03</p>
+  <textarea id="bbin" placeholder="2026-11-04 09:12:03&#10;2026-11-04 09:15:40"></textarea>
+  <div class="row" style="margin-top:8px"><label>블랙박스 시계 보정(초) <input type="number" id="off" value="0" step="1"></label><button id="match">위치 맞추기</button></div>
+  <table style="margin-top:8px"><tbody id="mres"></tbody></table>
+</div>
+
+<script>
+// ===== SDK와 같은 계산 (정수 mg, 0.05초 평균, 쿨다운 2초) =====
+const S = { win: [], sum: 0, n: 20, last: -1e9, running: false, samples: 0, t0: 0 };
+const gps = [];          // {t, lat, lon, kmh}
+const events = [];       // {t, score, kmh, lat, lon}
+let curKmh = null, watchId = null;
+const $ = id => document.getElementById(id);
+
+function isqrt(v){ return Math.floor(Math.sqrt(v)); }   // C에서는 정수 제곱근
+function feed(t, ax, ay, az){                          // 입력 m/s²
+  const x = Math.round(ax/9.80665*1000), y = Math.round(ay/9.80665*1000), z = Math.round(az/9.80665*1000);
+  const mag = isqrt(x*x + y*y + z*z);
+  const shock = Math.abs(mag - 1000);                  // | |a| - 1g |
+  S.win.push(shock); S.sum += shock;
+  if (S.win.length > S.n) S.sum -= S.win.shift();
+  const score = Math.round(S.sum / S.win.length);
+  const thr = Math.round(parseFloat($("thr").value)*1000) || 200;
+  const minK = parseFloat($("minkmh").value) || 0;
+  if (score >= thr && t - S.last >= 2000) {
+    S.last = t;
+    if (minK > 0 && (curKmh === null || curKmh < minK)) return score;
+    const g = nearestGps(t);
+    events.unshift({ t, score, kmh: curKmh, lat: g && g.lat, lon: g && g.lon });
+    renderEvents();
+    $("live").classList.remove("flash"); void $("live").offsetWidth; $("live").classList.add("flash");
+    if (navigator.vibrate) navigator.vibrate(150);
+  }
+  return score;
+}
+
+function onMotion(e){
+  const a = e.accelerationIncludingGravity; if (!a || a.x === null) return;
+  const t = Date.now();
+  if (!S.t0) S.t0 = t;
+  S.samples++;
+  const sc = feed(t, a.x, a.y, a.z);
+  if (S.samples % 5 === 0) {
+    $("score").textContent = (sc/1000).toFixed(2);
+    const thr = parseFloat($("thr").value) || 0.2;
+    $("fill").style.width = Math.min(100, sc/1000/(thr*2)*100) + "%";
+    $("mark").style.left = "50%";
+  }
+  if (S.samples === 50) {                                // 실제 센서 속도에 맞춰 평균창을 약 0.05초로
+    const hz = 50 / ((t - S.t0)/1000);
+    S.n = Math.max(1, Math.min(32, Math.round(hz * 0.05)));
+    $("hz").textContent = Math.round(hz) + "Hz (평균 " + S.n + "개)";
+  }
+}
+
+function nearestGps(t){
+  let best = null, bd = 1e18;
+  for (const g of gps) { const d = Math.abs(g.t - t); if (d < bd) { bd = d; best = g; } }
+  return best && bd <= 10000 ? best : null;              // 10초 안의 기록만 인정
+}
+
+async function start(){
+  try {
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+      const r = await DeviceMotionEvent.requestPermission();   // 아이폰은 허락 필요
+      if (r !== "granted") { $("status").textContent = "가속도 센서 허락이 필요해요."; return; }
+    }
+  } catch (err) { $("status").textContent = "가속도 센서를 쓸 수 없어요: " + err.message; return; }
+  window.addEventListener("devicemotion", onMotion);
+  if ("geolocation" in navigator) {
+    watchId = navigator.geolocation.watchPosition(p => {
+      curKmh = p.coords.speed != null ? p.coords.speed * 3.6 : curKmh;
+      gps.push({ t: p.timestamp || Date.now(), lat: p.coords.latitude, lon: p.coords.longitude, kmh: curKmh });
+      $("gpsn").textContent = gps.length + "개";
+      $("kmh").textContent = curKmh != null ? curKmh.toFixed(0) + " km/h" : "-";
+    }, err => { $("status").textContent = "GPS 오류: " + err.message + " (위치 허용, HTTPS 주소인지 확인)"; },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+  }
+  S.running = true; S.samples = 0; S.t0 = 0;
+  $("start").disabled = true; $("stop").disabled = false;
+  $("status").textContent = "측정중... 화면을 켜 두세요. (꺼지면 멈춰요)";
+  try { if ("wakeLock" in navigator) await navigator.wakeLock.request("screen"); } catch(_){}
+}
+function stop(){
+  window.removeEventListener("devicemotion", onMotion);
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  S.running = false; $("start").disabled = false; $("stop").disabled = true;
+  $("status").textContent = "멈춤. 감지 " + events.length + "개, GPS " + gps.length + "개";
+}
+
+const fmt = t => { const d = new Date(t); const p = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+const maplink = (lat, lon) => lat != null ? `<a target="_blank" rel="noopener" href="https://maps.google.com/?q=${lat.toFixed(6)},${lon.toFixed(6)}">지도</a>` : "위치없음";
+
+function renderEvents(){
+  $("evn").textContent = events.length;
+  $("evs").innerHTML = events.map(e => `<tr><td>${fmt(e.t).slice(11)}</td><td>${(e.score/1000).toFixed(2)}g</td><td>${e.kmh!=null?e.kmh.toFixed(0):"-"}</td><td>${maplink(e.lat,e.lon)}</td></tr>`).join("");
+}
+
+function download(){
+  let s = "종류,시간,점수g,속도kmh,위도,경도\n";
+  for (const e of [...events].reverse()) s += `감지,${fmt(e.t)},${(e.score/1000).toFixed(3)},${e.kmh??""},${e.lat??""},${e.lon??""}\n`;
+  for (const g of gps) s += `GPS,${fmt(g.t)},,${g.kmh!=null?g.kmh.toFixed(1):""},${g.lat},${g.lon}\n`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿"+s], {type:"text/csv"}));
+  a.download = "pothole_phone_" + fmt(Date.now()).replace(/[: ]/g,"-") + ".csv"; a.click();
+}
+
+function match(){
+  const off = (parseFloat($("off").value) || 0) * 1000;
+  const lines = $("bbin").value.split(/\n/).map(s => s.trim()).filter(Boolean);
+  $("mres").innerHTML = lines.map(l => {
+    const t = new Date(l.replace(" ", "T")).getTime();
+    if (isNaN(t)) return `<tr><td>${l}</td><td>시간 형식 오류</td></tr>`;
+    const g = nearestGps(t + off);
+    return `<tr><td>${l}</td><td>${g ? maplink(g.lat, g.lon) + " (차이 " + Math.round(Math.abs(g.t-(t+off))/1000) + "초)" : "그 시간 GPS 기록 없음"}</td></tr>`;
+  }).join("");
+}
+
+$("start").onclick = start; $("stop").onclick = stop; $("dl").onclick = download; $("match").onclick = match;
+</script>
+</body>
+</html>

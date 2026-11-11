@@ -51,6 +51,7 @@ textarea{width:100%;min-height:70px;font:inherit;font-size:13px;border-radius:8p
   <input id="sburl" placeholder="https://xxxx.supabase.co" style="width:100%;margin-bottom:6px">
   <input id="sbkey" placeholder="anon 또는 publishable 키" style="width:100%;margin-bottom:6px">
   <label style="display:block;margin:4px 0"><input type="checkbox" id="topot" checked> 감지하면 potholes(지도 빨간 핀)에 올리기</label>
+  <label style="display:block;margin:4px 0"><input type="checkbox" id="pimode"> <b>라즈베리파이 센서 사용</b> (폰 흔들기 대신 파이가 보낸 충격 신호로 사진·위치 올림)</label>
   <label style="display:block;margin:4px 0"><input type="checkbox" id="live5" checked> 측정 중 내 위치를 5초마다 gps_logs로 보내기 (지도의 내 차 위치)</label>
   <div class="row"><button class="alt" id="sbsave">저장</button><button class="alt" id="sbtest">지금 위치로 테스트 업로드</button></div>
   <p class="k" id="sbmsg" style="margin:8px 0 0"></p>
@@ -113,7 +114,7 @@ function feed(t, ax, ay, az){                          // 입력 m/s²
   const score = Math.round(S.sum / S.win.length);
   const thr = Math.round(parseFloat($("thr").value)*1000) || 200;
   const minK = parseFloat($("minkmh").value) || 0;
-  if (score >= thr && t - S.last >= 2000) {
+  if (!$("pimode").checked && score >= thr && t - S.last >= 2000) {
     S.last = t;
     if (minK > 0 && (curKmh === null || curKmh < minK)) return score;
     const g = nearestGps(t);
@@ -178,7 +179,7 @@ async function start(){
 function stop(){
   window.removeEventListener("devicemotion", onMotion);
   if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-  S.running = false; $("start").disabled = false; $("stop").disabled = true;
+  S.running = false; $("start").disabled = false; $("stop").disabled = true; lastShockId = null;
   stopCam();
   $("status").textContent = "멈춤. 감지 " + events.length + "개, GPS " + gps.length + "개";
 }
@@ -248,7 +249,7 @@ async function upload(ev, alsoGps){
   }
   if ($("topot").checked) {
     const row = { title: "자동 감지 테스트", status: "발견", latitude: ev.lat, longitude: ev.lon,
-            description: `폰 충격 ${(ev.score/1000).toFixed(2)}g, ${ev.kmh != null ? ev.kmh.toFixed(0) + "km/h" : "속도모름"}, ${fmt(ev.t)}` };
+            description: `${ev.from || "폰"} 충격 ${(ev.score/1000).toFixed(2)}g, ${ev.kmh != null ? ev.kmh.toFixed(0) + "km/h" : "속도모름"}, ${fmt(ev.t)}` };
     if (imageUrl) row.image_url = imageUrl;
     try { await sbInsert("potholes", row);
           msgs.push("potholes ✓"); }
@@ -270,7 +271,7 @@ async function startCam(){
       const w = 640, h = Math.round(v.videoHeight * w / v.videoWidth);
       cv.width = w; cv.height = h; cv.getContext("2d").drawImage(v, 0, 0, w, h);
       const t = Date.now();
-      cv.toBlob(b => { if (!b) return; frames.push({ t, blob: b }); while (frames.length && t - frames[0].t > 2000) frames.shift(); }, "image/jpeg", 0.75);
+      cv.toBlob(b => { if (!b) return; frames.push({ t, blob: b }); while (frames.length && t - frames[0].t > 6000) frames.shift(); }, "image/jpeg", 0.75);
     }, 200);
   } catch (e) { $("cammsg").textContent = "카메라 못 켬: " + e.message; }
 }
@@ -279,8 +280,12 @@ function stopCam(){
   if (camStream) camStream.getTracks().forEach(tr => tr.stop()); camStream = null;
   frames.length = 0; $("cammsg").textContent = "";
 }
-function pickFrame(t){
+function pickFrame(t, exact){
   if (!frames.length) return null;
+  if (exact) {                                          // 파이가 이미 사진시점을 계산해서 보냄
+    let b = frames[0]; for (const f of frames) if (Math.abs(f.t - t) < Math.abs(b.t - t)) b = f;
+    $("lastshot").src = URL.createObjectURL(b.blob); $("lastshot").style.display = "block"; return b.blob;
+  }
   // 카메라는 앞 6m 쯤을 봄 → 바퀴가 밟았을땐 이미 지나감. 속도로 몇 ms 전 화면인지 계산 (모르면 0.5초)
   const back = curKmh && curKmh > 3 ? Math.min(1500, 6 / (curKmh / 3.6) * 1000) : 500;
   const want = t - back;
@@ -299,6 +304,39 @@ async function sbUploadPhoto(blob, t){
   if (!r.ok) { let m = ""; try { m = (await r.json()).message || ""; } catch(_){} throw new Error(r.status + (m ? " " + m : "")); }
   return `${url}/storage/v1/object/public/${bucket}/${path}`;
 }
+
+// ===== 라즈베리파이 충격 신호 받기 (Supabase shock_events 를 우편함처럼) =====
+let lastShockId = null, shockBusy = false;
+store.get("pimode") === "1" && ($("pimode").checked = true);
+$("pimode").onchange = () => store.set("pimode", $("pimode").checked ? "1" : "0");
+async function sbSelect(q){
+  const url = ($("sburl").value || store.get("sburl")).trim().replace(/\/+$/,""), key = ($("sbkey").value || store.get("sbkey")).trim();
+  const r = await fetch(`${url}/rest/v1/${q}`, { headers: Object.assign({ apikey: key }, key.startsWith("eyJ") ? { Authorization: "Bearer " + key } : {}) });
+  if (!r.ok) throw new Error("shock_events " + r.status);
+  return r.json();
+}
+setInterval(async () => {
+  if (!S.running || !$("pimode").checked || shockBusy) return;
+  shockBusy = true;
+  try {
+    if (lastShockId === null) {                          // 시작 시점 이후 신호만
+      const last = await sbSelect("shock_events?select=id&order=id.desc&limit=1");
+      lastShockId = last.length ? last[0].id : 0;
+    } else {
+      const rows = await sbSelect(`shock_events?select=id,t_ms,photo_ms,score,speed_kmh&id=gt.${lastShockId}&order=id.asc&limit=10`);
+      for (const r of rows) {
+        lastShockId = r.id;
+        const t = Number(r.t_ms), g = nearestGps(t);
+        const ev = { t, score: Math.round((r.score || 0) * 1000), kmh: r.speed_kmh ?? curKmh,
+                     lat: g && g.lat, lon: g && g.lon, up: "", shot: pickFrame(Number(r.photo_ms || t), true), from: "파이" };
+        events.unshift(ev); renderEvents(); upload(ev, false);
+        if (navigator.vibrate) navigator.vibrate(150);
+      }
+      $("status").textContent = "파이 신호 기다리는중... (받은 신호 마지막 번호 " + lastShockId + ")";
+    }
+  } catch (e) { $("status").textContent = "파이 신호 확인 실패: " + e.message + " (shock_events 테이블 만들었는지 확인)"; }
+  shockBusy = false;
+}, 1000);
 
 // 측정 중 5초마다 내 위치 → gps_logs (팀 웹 지도의 GPS 마커가 따라 움직임)
 let lastLive = 0;

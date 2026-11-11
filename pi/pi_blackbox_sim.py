@@ -4,6 +4,7 @@
 
 실행 (01_pi 폴더에서)
   python3 pi_blackbox_sim.py key                     Enter 칠때마다 가짜 충격 (센서 없을때)
+  python3 pi_blackbox_sim.py key --phone             충격 신호만 보내고, 사진·위치는 폰 앱이 붙여서 올림 (폰 앱에서 '라즈베리파이 센서 사용' 체크)
   python3 pi_blackbox_sim.py replay calib_normal.csv 실차로 기록한 진짜 흔들림을 다시 흘려보냄 (빨리감기 10배)
   python3 pi_blackbox_sim.py replay calib_normal.csv --x 1   실제 속도로
   python3 pi_blackbox_sim.py replay calib_normal.csv --dry  서버 안올리고 판별결과만 바로 (방지턱 맞췄는지, 오감지 몇번)
@@ -169,7 +170,24 @@ def take_photo(t_event):
 
 
 # ---------------- 감지되면 ----------------
+PHONE_MODE = "--phone" in sys.argv
+
+
+def send_shock(ev, t_event):
+    """폰 앱한테 '충격 났어' 신호만 보냄 (Supabase shock_events 테이블을 우편함처럼)"""
+    t_ms = int(t_event * 1000)
+    row = {"t_ms": t_ms, "photo_ms": t_ms - int(ev.photo_back_ms), "score": round(ev.score_mg / 1000, 3),
+           "speed_kmh": ev.speed_kmh, "source": "pi"}
+    try:
+        sb_insert("shock_events", row)
+        print(f"\n★ 충격 {ev.score_mg/1000:.2f}g → 폰으로 신호 보냄 ✓ (사진은 {ev.photo_back_ms}ms 전 화면)")
+    except Exception as e:
+        print("\n★ 충격 감지, 신호 보내기 실패 ✗", e)
+
+
 def on_event(ev, t_event, loc=None):
+    if PHONE_MODE:
+        return send_shock(ev, t_event)
     print(f"\n★ 충격감지! 점수 {ev.score_mg/1000:.2f}g (기준 {ev.threshold_mg/1000:.2f}g), 사진은 {ev.photo_back_ms}ms 전 프레임")
     lat, lon, src = loc if loc else find_location(t_event)
     print(f"    위치 {lat:.6f}, {lon:.6f} ← {src}")

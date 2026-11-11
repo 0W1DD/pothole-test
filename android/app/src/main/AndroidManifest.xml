@@ -44,4 +44,7 @@
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <!-- 감지되면 진동 -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 감지 순간 사진 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>

@@ -56,6 +56,16 @@ textarea{width:100%;min-height:70px;font:inherit;font-size:13px;border-radius:8p
   <p class="k" id="sbmsg" style="margin:8px 0 0"></p>
 </div>
 
+<div class="card">
+  <div class="row" style="justify-content:space-between"><strong>카메라 (감지 순간 사진)</strong>
+  <label><input type="checkbox" id="camon" checked> 사진 같이 올리기</label></div>
+  <p class="k">폰 뒷카메라로 계속 보고 있다가, 충격이 오면 조금 전 화면을 골라 올려요. 사진은 Supabase Storage 버킷에 저장돼요.</p>
+  <video id="cam" playsinline muted style="width:100%;border-radius:10px;background:#000;max-height:220px;object-fit:cover"></video>
+  <div class="row" style="margin-top:8px"><label>버킷 이름 <input id="bucket" value="pothole-images" style="width:150px;font:inherit;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></label>
+  <span class="k" id="cammsg"></span></div>
+  <img id="lastshot" alt="" style="display:none;width:100%;border-radius:10px;margin-top:8px">
+</div>
+
 <div class="card" id="live">
   <div class="k">지금 충격점수 (g)</div>
   <div class="big" id="score">0.00</div>
@@ -107,7 +117,7 @@ function feed(t, ax, ay, az){                          // 입력 m/s²
     S.last = t;
     if (minK > 0 && (curKmh === null || curKmh < minK)) return score;
     const g = nearestGps(t);
-    const ev = { t, score, kmh: curKmh, lat: g && g.lat, lon: g && g.lon, up: "" };
+    const ev = { t, score, kmh: curKmh, lat: g && g.lat, lon: g && g.lon, up: "", shot: pickFrame(t) };
     events.unshift(ev);
     renderEvents();
     upload(ev);
@@ -160,6 +170,7 @@ async function start(){
     { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
   }
   S.running = true; S.samples = 0; S.t0 = 0;
+  if ($("camon").checked) startCam();
   $("start").disabled = true; $("stop").disabled = false;
   $("status").textContent = "측정중... 화면을 켜 두세요. (꺼지면 멈춰요)";
   try { if ("wakeLock" in navigator) await navigator.wakeLock.request("screen"); } catch(_){}
@@ -168,6 +179,7 @@ function stop(){
   window.removeEventListener("devicemotion", onMotion);
   if (watchId !== null) navigator.geolocation.clearWatch(watchId);
   S.running = false; $("start").disabled = false; $("stop").disabled = true;
+  stopCam();
   $("status").textContent = "멈춤. 감지 " + events.length + "개, GPS " + gps.length + "개";
 }
 
@@ -229,14 +241,65 @@ async function upload(ev, alsoGps){
     try { await sbInsert("gps_logs", { lat: ev.lat, lon: ev.lon }); msgs.push("gps_logs ✓"); }
     catch (e) { msgs.push("gps_logs ✗(" + e.message + ")"); }
   }
+  let imageUrl = null;
+  if ($("camon").checked && ev.shot) {
+    try { imageUrl = await sbUploadPhoto(ev.shot, ev.t); msgs.push("사진 ✓"); }
+    catch (e) { msgs.push("사진 ✗(" + e.message + ")"); }
+  }
   if ($("topot").checked) {
-    try { await sbInsert("potholes", { title: "자동 감지 테스트", status: "발견", latitude: ev.lat, longitude: ev.lon,
-            description: `폰 충격 ${(ev.score/1000).toFixed(2)}g, ${ev.kmh != null ? ev.kmh.toFixed(0) + "km/h" : "속도모름"}, ${fmt(ev.t)}` });
+    const row = { title: "자동 감지 테스트", status: "발견", latitude: ev.lat, longitude: ev.lon,
+            description: `폰 충격 ${(ev.score/1000).toFixed(2)}g, ${ev.kmh != null ? ev.kmh.toFixed(0) + "km/h" : "속도모름"}, ${fmt(ev.t)}` };
+    if (imageUrl) row.image_url = imageUrl;
+    try { await sbInsert("potholes", row);
           msgs.push("potholes ✓"); }
     catch (e) { msgs.push("potholes ✗(" + e.message + ")"); }
   }
   ev.up = "· " + (msgs.join(" ") || "올릴곳 꺼짐"); renderEvents(); $("sbmsg").textContent = "마지막 업로드: " + (msgs.join(" ") || "-");
 }
+// ===== 카메라: 최근 2초 화면을 들고 있다가 충격 시점 조금 전 화면을 고름 (SDK photo_back 과 같은 생각) =====
+const frames = [];            // {t, blob}
+let camStream = null, camTimer = null;
+const cv = document.createElement("canvas");
+async function startCam(){
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false });
+    const v = $("cam"); v.srcObject = camStream; await v.play();
+    $("cammsg").textContent = "카메라 켜짐";
+    camTimer = setInterval(() => {                       // 0.2초마다 한 장, 2초치만 보관
+      if (!v.videoWidth) return;
+      const w = 640, h = Math.round(v.videoHeight * w / v.videoWidth);
+      cv.width = w; cv.height = h; cv.getContext("2d").drawImage(v, 0, 0, w, h);
+      const t = Date.now();
+      cv.toBlob(b => { if (!b) return; frames.push({ t, blob: b }); while (frames.length && t - frames[0].t > 2000) frames.shift(); }, "image/jpeg", 0.75);
+    }, 200);
+  } catch (e) { $("cammsg").textContent = "카메라 못 켬: " + e.message; }
+}
+function stopCam(){
+  if (camTimer) clearInterval(camTimer); camTimer = null;
+  if (camStream) camStream.getTracks().forEach(tr => tr.stop()); camStream = null;
+  frames.length = 0; $("cammsg").textContent = "";
+}
+function pickFrame(t){
+  if (!frames.length) return null;
+  // 카메라는 앞 6m 쯤을 봄 → 바퀴가 밟았을땐 이미 지나감. 속도로 몇 ms 전 화면인지 계산 (모르면 0.5초)
+  const back = curKmh && curKmh > 3 ? Math.min(1500, 6 / (curKmh / 3.6) * 1000) : 500;
+  const want = t - back;
+  let best = frames[0];
+  for (const f of frames) if (Math.abs(f.t - want) < Math.abs(best.t - want)) best = f;
+  $("lastshot").src = URL.createObjectURL(best.blob); $("lastshot").style.display = "block";
+  return best.blob;
+}
+async function sbUploadPhoto(blob, t){
+  const url = ($("sburl").value || store.get("sburl")).trim().replace(/\/+$/,""), key = ($("sbkey").value || store.get("sbkey")).trim();
+  const bucket = ($("bucket").value || "pothole-images").trim();
+  const path = "phone/" + fmt(t).replace(/[: ]/g, "-") + "-" + Math.random().toString(36).slice(2, 6) + ".jpg";
+  const r = await fetch(`${url}/storage/v1/object/${bucket}/${path}`, { method: "POST",
+    headers: Object.assign({ apikey: key, "Content-Type": "image/jpeg" }, key.startsWith("eyJ") ? { Authorization: "Bearer " + key } : {}),
+    body: blob });
+  if (!r.ok) { let m = ""; try { m = (await r.json()).message || ""; } catch(_){} throw new Error(r.status + (m ? " " + m : "")); }
+  return `${url}/storage/v1/object/public/${bucket}/${path}`;
+}
+
 // 측정 중 5초마다 내 위치 → gps_logs (팀 웹 지도의 GPS 마커가 따라 움직임)
 let lastLive = 0;
 setInterval(async () => {
@@ -249,7 +312,7 @@ setInterval(async () => {
 $("sbtest").onclick = () => {
   $("sbmsg").textContent = "위치 찾는중...";
   navigator.geolocation.getCurrentPosition(p => {
-    const ev = { t: Date.now(), score: 0, kmh: null, lat: p.coords.latitude, lon: p.coords.longitude, up: "" };
+    const ev = { t: Date.now(), score: 0, kmh: null, lat: p.coords.latitude, lon: p.coords.longitude, up: "", shot: pickFrame(Date.now()) };
     events.unshift(ev); renderEvents(); upload(ev, true);
   }, err => { $("sbmsg").textContent = "GPS 오류: " + err.message; }, { enableHighAccuracy: true, timeout: 15000 });
 };

@@ -52,6 +52,9 @@ textarea{width:100%;min-height:70px;font:inherit;font-size:13px;border-radius:8p
   <input id="sbkey" placeholder="anon 또는 publishable 키" style="width:100%;margin-bottom:6px">
   <label style="display:block;margin:4px 0"><input type="checkbox" id="topot" checked> 감지하면 potholes(지도 빨간 핀)에 올리기</label>
   <label style="display:block;margin:4px 0"><input type="checkbox" id="pimode"> <b>라즈베리파이 센서 사용</b> (폰 흔들기 대신 파이가 보낸 충격 신호로 사진·위치 올림)</label>
+  <label style="display:block;margin:4px 0"><input type="checkbox" id="bmode"> <b>B형: 파이 와이파이에서 가져오기</b> (파이는 인터넷 없음, 폰이 받아서 올림)</label>
+  <div class="row" style="margin:2px 0 6px 22px"><label class="k">파이 주소 <input id="piaddr" value="http://10.42.0.1:8080" style="width:190px;font:inherit;font-size:13px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></label>
+  <span class="k" id="bmsg"></span></div>
   <label style="display:block;margin:4px 0"><input type="checkbox" id="live5" checked> 측정 중 내 위치를 5초마다 gps_logs로 보내기 (지도의 내 차 위치)</label>
   <div class="row"><button class="alt" id="sbsave">저장</button><button class="alt" id="sbtest">지금 위치로 테스트 업로드</button></div>
   <p class="k" id="sbmsg" style="margin:8px 0 0"></p>
@@ -114,7 +117,7 @@ function feed(t, ax, ay, az){                          // 입력 m/s²
   const score = Math.round(S.sum / S.win.length);
   const thr = Math.round(parseFloat($("thr").value)*1000) || 200;
   const minK = parseFloat($("minkmh").value) || 0;
-  if (!$("pimode").checked && score >= thr && t - S.last >= 2000) {
+  if (!$("pimode").checked && !$("bmode").checked && score >= thr && t - S.last >= 2000) {
     S.last = t;
     if (minK > 0 && (curKmh === null || curKmh < minK)) return score;
     const g = nearestGps(t);
@@ -256,6 +259,7 @@ async function upload(ev, alsoGps){
     catch (e) { msgs.push("potholes ✗(" + e.message + ")"); }
   }
   ev.up = "· " + (msgs.join(" ") || "올릴곳 꺼짐"); renderEvents(); $("sbmsg").textContent = "마지막 업로드: " + (msgs.join(" ") || "-");
+  return !msgs.some(m => m.startsWith("potholes ✗"));
 }
 // ===== 카메라: 최근 2초 화면을 들고 있다가 충격 시점 조금 전 화면을 고름 (SDK photo_back 과 같은 생각) =====
 const frames = [];            // {t, blob}
@@ -337,6 +341,60 @@ setInterval(async () => {
   } catch (e) { $("status").textContent = "파이 신호 확인 실패: " + e.message + " (shock_events 테이블 만들었는지 확인)"; }
   shockBusy = false;
 }, 1000);
+
+// ===== B형: 파이(블랙박스) 와이파이에서 기록 가져오기 → 인터넷 될때 업로드 =====
+// 파이 와이파이엔 인터넷이 없어서 업로드가 실패할 수 있음 → 대기열에 두고 5초마다 다시 시도
+const bQueue = [];
+let bBusy = false;
+store.get("bmode") === "1" && ($("bmode").checked = true);
+if (store.get("piaddr")) $("piaddr").value = store.get("piaddr");
+$("bmode").onchange = () => store.set("bmode", $("bmode").checked ? "1" : "0");
+$("piaddr").onchange = () => store.set("piaddr", $("piaddr").value.trim());
+const nativeHttp = () => window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+                         && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+async function piGet(path, asBlob){
+  const url = $("piaddr").value.trim().replace(/\/+$/,"") + "/" + path;
+  const H = nativeHttp();
+  if (H) {                                   // 앱(APK): http 파이 주소도 네이티브로 접속
+    const r = await H.get({ url, responseType: asBlob ? "blob" : "json", connectTimeout: 3000, readTimeout: 5000 });
+    if (r.status >= 300) throw new Error("파이 " + r.status);
+    if (!asBlob) return typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+    const bin = atob(r.data); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+    return new Blob([a], { type: "image/jpeg" });
+  }
+  const r = await fetch(url, { cache: "no-store" });   // 웹(https)에서는 보안상 막힐 수 있음 → APK로
+  if (!r.ok) throw new Error("파이 " + r.status);
+  return asBlob ? r.blob() : r.json();
+}
+setInterval(async () => {
+  if (!S.running || !$("bmode").checked || bBusy) return;
+  bBusy = true;
+  try {
+    const idx = await piGet("index.json");
+    let lastId = Number(store.get("b_last") || 0);
+    const recs = (idx.records || []).filter(r => r.id > lastId);
+    if (lastId > 0 && (idx.records || []).length && idx.records[idx.records.length - 1].id < lastId) { lastId = 0; }  // 파이 기록이 새로 시작됨
+    for (const r of recs) {
+      const t = Number(r.t_ms), g = nearestGps(t);
+      let shot = pickFrame(Number(r.photo_ms || t), true);        // 폰 카메라에 그 시간 화면 있으면
+      if (!shot && r.photo) { try { shot = await piGet(r.photo, true); } catch (_) {} }   // 없으면 파이 사진
+      const ev = { t, score: Math.round((r.score || 0) * 1000), kmh: r.speed_kmh ?? curKmh,
+                   lat: g && g.lat, lon: g && g.lon, up: "· 업로드 대기", shot, from: "블랙박스(B형)", pending: true };
+      events.unshift(ev); bQueue.push(ev); store.set("b_last", String(r.id)); lastId = r.id;
+      if (navigator.vibrate) navigator.vibrate(150);
+    }
+    renderEvents();
+    $("bmsg").textContent = "파이 연결됨 ✓ 받은 기록 #" + lastId + (bQueue.length ? " · 업로드 대기 " + bQueue.length + "개" : "");
+  } catch (e) { $("bmsg").textContent = "파이 연결 안됨 (" + e.message + ") · 파이 와이파이에 붙었는지 확인"; }
+  bBusy = false;
+}, 1500);
+setInterval(async () => {                    // 대기열 업로드 (인터넷 될 때 성공)
+  if (!bQueue.length) return;
+  const ev = bQueue[0];
+  const ok = await upload(ev, false);
+  if (ok) { ev.pending = false; bQueue.shift(); }
+  $("bmsg").textContent = (bQueue.length ? "업로드 대기 " + bQueue.length + "개 (인터넷 되면 자동으로 올림)" : "업로드 다 됨 ✓");
+}, 5000);
 
 // 측정 중 5초마다 내 위치 → gps_logs (팀 웹 지도의 GPS 마커가 따라 움직임)
 let lastLive = 0;

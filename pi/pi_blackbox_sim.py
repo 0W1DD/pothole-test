@@ -4,6 +4,7 @@
 
 실행 (01_pi 폴더에서)
   python3 pi_blackbox_sim.py key                     Enter 칠때마다 가짜 충격 (센서 없을때)
+  python3 pi_blackbox_sim.py key --serve             B형: 인터넷 없이 파이 안에 저장 + 파이 와이파이로 폰이 가져감 (폰 앱 'B형' 체크)
   python3 pi_blackbox_sim.py key --phone             충격 신호만 보내고, 사진·위치는 폰 앱이 붙여서 올림 (폰 앱에서 '라즈베리파이 센서 사용' 체크)
   python3 pi_blackbox_sim.py replay calib_normal.csv 실차로 기록한 진짜 흔들림을 다시 흘려보냄 (빨리감기 10배)
   python3 pi_blackbox_sim.py replay calib_normal.csv --x 1   실제 속도로
@@ -48,7 +49,9 @@ THRESHOLD_MG = 200                               # 실차 캘리브레이션 결
 try:
     CFG = json.load(open(os.path.join(HERE, "server.json"), encoding="utf-8"))
 except FileNotFoundError:
-    sys.exit("server.json 이 없어요. 파일 맨위 설명대로 만들어주세요.")
+    if "--serve" not in sys.argv:
+        sys.exit("server.json 이 없어요. 파일 맨위 설명대로 만들어주세요.")
+    CFG = {"url": "http://offline", "key": ""}      # B형은 파이가 서버에 안올리니까 없어도됨
 URL, KEY = CFG["url"].rstrip("/"), CFG["key"].strip()
 HDR = {"apikey": KEY, "Content-Type": "application/json"}
 if KEY.startswith("eyJ"):                        # 옛날 anon 키면 Authorization 도
@@ -171,6 +174,49 @@ def take_photo(t_event):
 
 # ---------------- 감지되면 ----------------
 PHONE_MODE = "--phone" in sys.argv
+SERVE_MODE = "--serve" in sys.argv          # B형: 서버 대신 파이 안에 저장, 폰이 와이파이로 가져감
+B_DIR = os.path.join(HERE, "b_store")
+b_records = []
+
+
+def b_save(ev, t_event):
+    """B형: 기록을 파이 안에만 저장하고 index.json 갱신 (블랙박스 SD카드처럼)"""
+    os.makedirs(os.path.join(B_DIR, "photos"), exist_ok=True)
+    t_ms = int(t_event * 1000)
+    rec = {"id": (b_records[-1]["id"] + 1) if b_records else 1, "t_ms": t_ms,
+           "photo_ms": t_ms - int(ev.photo_back_ms), "score": round(ev.score_mg / 1000, 3),
+           "speed_kmh": ev.speed_kmh, "photo": None}
+    photo, _ = take_photo(t_event)                 # 파이 카메라 있으면 그 사진도 같이 (없으면 폰이 찍음)
+    if photo:
+        name = f"{rec['id']:05d}.jpg"
+        os.replace(photo, os.path.join(B_DIR, "photos", name))
+        rec["photo"] = "photos/" + name
+    b_records.append(rec)
+    tmp = os.path.join(B_DIR, "index.tmp")
+    json.dump({"device": "pi-blackbox", "records": b_records[-200:]}, open(tmp, "w"))
+    os.replace(tmp, os.path.join(B_DIR, "index.json"))
+    print(f"\n★ 충격 {rec['score']:.2f}g → 파이 안에 저장 (#{rec['id']}). 폰이 와이파이로 가져갈 거예요")
+
+
+def b_server(port=8080):
+    """파이 와이파이에 붙은 폰이 index.json 이랑 사진을 가져가게 하는 작은 서버"""
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from functools import partial
+    os.makedirs(B_DIR, exist_ok=True)
+    if not os.path.exists(os.path.join(B_DIR, "index.json")):
+        json.dump({"device": "pi-blackbox", "records": []}, open(os.path.join(B_DIR, "index.json"), "w"))
+
+    class H(SimpleHTTPRequestHandler):
+        def end_headers(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
+        def log_message(self, *a):
+            pass
+    srv = ThreadingHTTPServer(("0.0.0.0", port), partial(H, directory=B_DIR))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"  B형 서버 켜짐: 폰에서 http://10.42.0.1:{port} (파이 와이파이에 붙었을 때)")
 
 
 def send_shock(ev, t_event):
@@ -186,6 +232,8 @@ def send_shock(ev, t_event):
 
 
 def on_event(ev, t_event, loc=None):
+    if SERVE_MODE:
+        return b_save(ev, t_event)
     if PHONE_MODE:
         return send_shock(ev, t_event)
     print(f"\n★ 충격감지! 점수 {ev.score_mg/1000:.2f}g (기준 {ev.threshold_mg/1000:.2f}g), 사진은 {ev.photo_back_ms}ms 전 프레임")
@@ -281,6 +329,8 @@ def run_replay(path, speedup, dry, only_bumps):
 
 if __name__ == "__main__":
     threading.Thread(target=gps_thread, daemon=True).start()
+    if SERVE_MODE:
+        b_server()
     mode = sys.argv[1] if len(sys.argv) > 1 else "key"
     try:
         if mode == "replay":

@@ -108,7 +108,6 @@ public class BlackboxWifiPlugin extends Plugin {
         releaseNetwork();
         state = "connecting";
         pending = call;
-        call.setKeepAlive(true);
         callback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network n) {
                 network = n;
@@ -157,7 +156,6 @@ public class BlackboxWifiPlugin extends Plugin {
         pending = null;
         if (c == null) return;
         if (ok) c.resolve(info()); else c.reject(err);
-        c.setKeepAlive(false);
     }
 
     private void releaseNetwork() {

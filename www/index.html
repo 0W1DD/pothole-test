@@ -55,6 +55,10 @@ textarea{width:100%;min-height:70px;font:inherit;font-size:13px;border-radius:8p
   <label style="display:block;margin:4px 0"><input type="checkbox" id="bmode"> <b>B형: 파이 와이파이에서 가져오기</b> (파이는 인터넷 없음, 폰이 받아서 올림)</label>
   <div class="row" style="margin:2px 0 6px 22px"><label class="k">파이 주소 <input id="piaddr" value="http://10.42.0.1:8080" style="width:190px;font:inherit;font-size:13px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></label>
   <span class="k" id="bmsg"></span></div>
+  <div class="row" style="margin:2px 0 6px 22px"><label class="k">블랙박스 와이파이 <input id="bwssid" value="PotholeCam" style="width:120px;font:inherit;font-size:13px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></label>
+  <label class="k">비번 <input id="bwpw" value="pothole1234" style="width:110px;font:inherit;font-size:13px;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></label>
+  <button class="alt" id="bwreg" style="min-height:36px;padding:6px 12px">블랙박스 등록·연결</button></div>
+  <p class="k" id="bwmsg" style="margin:0 0 6px 22px">앱(APK)에서 등록하면: 폰 와이파이 설정에서 직접 연결하지 마세요. 앱이 블랙박스에만 따로 붙고, 업로드는 LTE로 바로 올라가요. (처음 한 번만 허용)</p>
   <label style="display:block;margin:4px 0"><input type="checkbox" id="live5" checked> 측정 중 내 위치를 5초마다 gps_logs로 보내기 (지도의 내 차 위치)</label>
   <div class="row"><button class="alt" id="sbsave">저장</button><button class="alt" id="sbtest">지금 위치로 테스트 업로드</button></div>
   <p class="k" id="sbmsg" style="margin:8px 0 0"></p>
@@ -352,8 +356,62 @@ $("bmode").onchange = () => store.set("bmode", $("bmode").checked ? "1" : "0");
 $("piaddr").onchange = () => store.set("piaddr", $("piaddr").value.trim());
 const nativeHttp = () => window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
                          && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+// --- 블랙박스 전용 와이파이 (앱 전용 통로, 인터넷은 LTE 그대로) ---
+const BW = () => window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+                 && window.Capacitor.Plugins && window.Capacitor.Plugins.BlackboxWifi;
+let bwState = { registered: false, connected: false }, bwTrying = false, bwLastTry = 0;
+function bwShow(s){
+  bwState = s || bwState;
+  const m = { connected: "블랙박스 와이파이 연결됨 ✓ (업로드는 LTE로)", connecting: "블랙박스 와이파이 연결 중...",
+              unavailable: "블랙박스 와이파이를 못 찾음 (파이 핫스팟 켜졌는지)", lost: "블랙박스 와이파이 끊김 → 자동 재연결",
+              idle: bwState.registered ? "등록됨 · B형 측정 시작하면 자동 연결" : "" };
+  if (m[bwState.state] !== undefined && m[bwState.state] !== "") $("bwmsg").textContent = m[bwState.state] + (bwState.bssid ? " · " + bwState.bssid : "");
+}
+async function bwEnsure(){                   // 연결 안 돼 있으면 자동 연결 (25초에 한 번만 시도)
+  const P = BW(); if (!P) return false;
+  try {
+    const s = await P.status(); bwShow(s);
+    if (s.connected) return true;
+    if (!s.registered || !s.supported || bwTrying || Date.now() - bwLastTry < 25000) return false;
+  } catch (_) { return false; }
+  bwTrying = true; bwLastTry = Date.now();
+  try { const r = await P.connect(); bwShow(r); return !!r.connected; }
+  catch (e) { $("bwmsg").textContent = "블랙박스 연결 실패: " + e.message; return false; }
+  finally { bwTrying = false; }
+}
+(async () => {
+  const P = BW();
+  if (!P) { $("bwreg").disabled = true; $("bwmsg").textContent = "블랙박스 자동 연결은 앱(APK)에서만 돼요. 웹에서는 폰 와이파이를 직접 연결하세요."; return; }
+  try {
+    const s = await P.status();
+    if (!s.supported) { $("bwreg").disabled = true; $("bwmsg").textContent = "안드로이드 10 이상에서만 자동 연결돼요."; return; }
+    if (s.ssid) $("bwssid").value = s.ssid;
+    bwShow(s);
+    P.addListener("change", bwShow);
+  } catch (_) {}
+})();
+$("bwreg").onclick = async () => {
+  const P = BW(); if (!P) return;
+  try {
+    await P.register({ ssid: $("bwssid").value.trim(), password: $("bwpw").value });
+    await P.disconnect();
+    bwLastTry = 0; $("bwmsg").textContent = "연결 요청… 폰에 뜨는 창에서 '연결' 눌러줘 (처음 한 번)";
+    $("bmode").checked = true; store.set("bmode", "1");
+    await bwEnsure();
+  } catch (e) { $("bwmsg").textContent = "등록 실패: " + e.message; }
+};
+
 async function piGet(path, asBlob){
   const url = $("piaddr").value.trim().replace(/\/+$/,"") + "/" + path;
+  const P = BW();
+  if (P && bwState.registered) {             // 등록된 블랙박스 → 전용 통로로만 접속
+    if (!(await bwEnsure())) throw new Error("블랙박스 와이파이 연결 안 됨");
+    const r = await P.get({ url, asBlob: !!asBlob });
+    if (r.status >= 300) throw new Error("파이 " + r.status);
+    if (!asBlob) return JSON.parse(r.data);
+    const bin = atob(r.data); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+    return new Blob([a], { type: "image/jpeg" });
+  }
   const H = nativeHttp();
   if (H) {                                   // 앱(APK): http 파이 주소도 네이티브로 접속
     const r = await H.get({ url, responseType: asBlob ? "blob" : "json", connectTimeout: 3000, readTimeout: 5000 });

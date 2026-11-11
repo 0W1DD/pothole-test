@@ -48,4 +48,11 @@
     <!-- 감지 순간 사진 -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- B형: 블랙박스 와이파이 자동 연결 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
 </manifest>

@@ -1,0 +1,3 @@
+Built-in image generation tool used.
+Prompt: Finalize reference design C only: soft dusty sky-blue background, white road with three dashed cutouts, butter-yellow location pin, dark slate-blue exclamation mark. No labels, full square blue background, centered emblem with adaptive icon margins. Preserve the chosen design.
+Android density exports and adaptive icon resources applied.

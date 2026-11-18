@@ -3,6 +3,7 @@
   충격 → SDK가 판단 → 사진 고르기 → 위치 붙이기 → Supabase potholes 에 올림 → 팀 웹 지도에 빨간핀
 
 실행 (03_라즈베리파이 폴더에서)
+  python3 pi_blackbox_sim.py sensor                  진짜 ADXL345 센서로 감지 → S23사진(adb) → YOLO → 업로드 (A형)
   python3 pi_blackbox_sim.py key                     Enter 칠때마다 가짜 충격 (센서 없을때)
   python3 pi_blackbox_sim.py key --serve             B형: 인터넷 없이 파이 안에 저장 + 파이 와이파이로 폰이 가져감 (폰 앱 'B형' 체크)
   python3 pi_blackbox_sim.py key --phone             충격 신호만 보내고, 사진·위치는 폰 앱이 붙여서 올림 (폰 앱에서 '라즈베리파이 센서 사용' 체크)
@@ -154,6 +155,65 @@ def route_pos(t):
     return ROUTE[0]
 
 
+# ---------------- S23 무선 adb 카메라 + YOLO (A형) ----------------
+import subprocess  # noqa: E402
+
+PI_DIR = HERE  # 팀 저장소에선 모델이 같은 폴더(03_라즈베리파이)에 있음
+sys.path.insert(0, PI_DIR)
+POTHOLE_NAMES = {"pothole", "woodlock"}          # pothole_detect.py 랑 같게
+YOLO_CONF = 0.25
+_model = None
+
+
+def adb(*args, timeout=10):
+    return subprocess.run(["adb", *args], capture_output=True, text=True, timeout=timeout).stdout.strip()
+
+
+def adb_photo():
+    """무선디버깅으로 붙은 폰에서 사진 1장 찍어서 jpg bytes 로. 폰 없으면 None"""
+    try:
+        if not any(l.endswith("\tdevice") for l in adb("devices").splitlines()):
+            return None
+        last = lambda: adb("shell", "ls -t /sdcard/DCIM/Camera | head -1")
+        before = last()
+        adb("shell", "input keyevent KEYCODE_WAKEUP")
+        adb("shell", "am start -a android.media.action.STILL_IMAGE_CAMERA")
+        time.sleep(1.5)
+        adb("shell", "input keyevent KEYCODE_CAMERA")
+        for _ in range(10):                      # 저장될때까지 최대 5초
+            time.sleep(0.5)
+            new = last()
+            if new and new != before:
+                break
+        else:
+            return None
+        time.sleep(0.5)                          # 파일 다 써질때까지
+        return subprocess.run(["adb", "exec-out", f"cat /sdcard/DCIM/Camera/{new}"],
+                              capture_output=True, timeout=20).stdout or None
+    except Exception as e:
+        print("    adb 사진 실패:", e)
+        return None
+
+
+def yolo_check(jpg):
+    """(라벨, 신뢰도, 찾은것들). 포트홀 있으면 그걸, 없으면 제일 확실한거"""
+    global _model
+    if _model is None:
+        from ultralytics import YOLO
+        print("    YOLO 모델 불러오는중...")
+        _model = YOLO(os.path.join(PI_DIR, "best_ncnn_model"), task="detect")
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+    res = _model(img, conf=YOLO_CONF, verbose=False)[0]
+    found = [(res.names[int(k)], float(c)) for k, c in zip(res.boxes.cls, res.boxes.conf)]
+    if not found:
+        return "없음", None, []
+    pot = [f for f in found if f[0] in POTHOLE_NAMES]
+    best = max(pot or found, key=lambda f: f[1])
+    return best[0], round(best[1], 3), found
+
+
 # ---------------- 사진 ----------------
 def take_photo(t_event):
     os.makedirs(os.path.join(HERE, "sim_photos"), exist_ok=True)
@@ -239,6 +299,20 @@ def on_event(ev, t_event, loc=None):
     print(f"\n★ 충격감지! 점수 {ev.score_mg/1000:.2f}g (기준 {ev.threshold_mg/1000:.2f}g), 사진은 {ev.photo_back_ms}ms 전 프레임")
     lat, lon, src = loc if loc else find_location(t_event)
     print(f"    위치 {lat:.6f}, {lon:.6f} ← {src}")
+    jpg = adb_photo()                            # A형: S23 찍기 → YOLO → 결과상관없이 업로드
+    if jpg:
+        from uploader import shrink, upload      # 01_pi/uploader.py (줄이기, Storage, 실패시 pending)
+        jpg = shrink(jpg)
+        label, conf, found = yolo_check(jpg)
+        os.makedirs(os.path.join(HERE, "sim_photos"), exist_ok=True)
+        open(os.path.join(HERE, "sim_photos", datetime.fromtimestamp(t_event).strftime("%Y%m%d_%H%M%S") + ".jpg"), "wb").write(jpg)
+        tag = "포트홀!" if label in POTHOLE_NAMES else "포트홀 아님"
+        print(f"    S23 사진 {len(jpg)//1024}KB → YOLO {tag} ({label} {conf}) 전체: {found}")
+        row = upload(jpg, lat, lon, impact=round(ev.score_mg / 1000, 3), label=label, conf=conf,
+                     title="블랙박스 자동감지 (A형 시뮬)")
+        print("    업로드 ✓ " + row["image_url"] if row else "    업로드 실패 → 01_pi/pending_uploads 에 보관")
+        return
+    print("    S23 연결 안됨 → 예전방식(사진없이)")
     photo, psrc = take_photo(t_event)
     img_url = sb_upload_image(photo) if photo else None
     print(f"    사진 {psrc}" + (f" → {img_url}" if img_url else ""))
@@ -278,6 +352,47 @@ def run_key():
                 on_event(ev, time.time())
         if not hit:
             print("  (쿨다운 2초 안이라 무시됨. 조금 있다 다시)")
+
+
+# ---------------- 모드3: 진짜 ADXL345 센서 (02_sdk/examples/pi_adxl.py 방식) ----------------
+def run_sensor():
+    from smbus2 import SMBus
+    ADDR = 0x53
+    bus = SMBus(1)
+    bus.write_byte_data(ADDR, 0x2C, 0x0C)        # 400Hz
+    bus.write_byte_data(ADDR, 0x31, 0x0B)        # ±16g full-res
+    bus.write_byte_data(ADDR, 0x2D, 0x08)        # 측정시작
+
+    def read_mg():
+        d = bus.read_i2c_block_data(ADDR, 0x32, 6)
+        c = lambda lo, hi: (((hi << 8) | lo) - 65536 if ((hi << 8) | lo) > 32767 else ((hi << 8) | lo)) * 39 // 10
+        return c(d[0], d[1]), c(d[2], d[3]), c(d[4], d[5])
+
+    d = make_detector()
+    d.set_speed(kmh=30)                          # GPS속도 없을때 사진시점 계산용
+    if not (PHONE_MODE or SERVE_MODE):           # YOLO 미리 불러두기 (첫 충격때 안느리게)
+        import numpy as np
+        import cv2
+        yolo_check(cv2.imencode(".jpg", np.zeros((64, 64, 3), np.uint8))[1].tobytes())
+    busy = threading.Event()
+
+    def handle(ev, t):
+        try:
+            on_event(ev, t)
+        finally:
+            busy.clear()
+
+    print(f"ADXL345 센서로 감지중 (기준 {THRESHOLD_MG/1000:.2f}g). 센서 톡 쳐보기 (끝: Ctrl+C)")
+    t0 = time.monotonic()
+    while True:
+        r, ev = d.feed(int((time.monotonic() - t0) * 1000), *read_mg())
+        if r == pothole.EVENT:
+            if busy.is_set():
+                print("\n  (앞 충격 사진/업로드 처리중이라 이번건 건너뜀)")
+            else:
+                busy.set()
+                threading.Thread(target=handle, args=(ev, time.time()), daemon=True).start()  # 센서읽기 안밀리게
+        time.sleep(0.0015)
 
 
 # ---------------- 모드2: 기록된 실차 데이터 다시 흘리기 ----------------
@@ -333,7 +448,9 @@ if __name__ == "__main__":
         b_server()
     mode = sys.argv[1] if len(sys.argv) > 1 else "key"
     try:
-        if mode == "replay":
+        if mode == "sensor":
+            run_sensor()
+        elif mode == "replay":
             x = float(sys.argv[sys.argv.index("--x") + 1]) if "--x" in sys.argv else 10.0
             run_replay(sys.argv[2], x, "--dry" in sys.argv, "--only-bumps" in sys.argv)
         else:

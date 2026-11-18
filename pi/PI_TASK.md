@@ -50,7 +50,7 @@ U=https://dwejbbhrjfcqcnslheas.supabase.co
 curl -s -o /dev/null -w "potholes %{http_code}\n" "$U/rest/v1/potholes?select=id&limit=1" -H "apikey: $K"
 curl -s -o /dev/null -w "shock_events %{http_code}\n" "$U/rest/v1/shock_events?select=id&limit=1" -H "apikey: $K"
 ```
-⚠️ `shock_events`가 200이 아니면 멈춘다. 그리고 사용자에게 "Supabase SQL Editor에서 `오늘_할일_및_구조설명.md` 5번의 SQL ②를 먼저 실행해줘"라고 알려준다.
+⚠️ `shock_events`가 200이 아니면 멈춘다. 그리고 사용자에게 "Supabase SQL Editor에서 `docs/오늘_할일_및_구조설명.md` 5번의 SQL ②를 먼저 실행해줘"라고 알려준다.
 
 ## 3단계 — 실차 기록으로 SDK 확인 (서버 안 올림)
 ```bash

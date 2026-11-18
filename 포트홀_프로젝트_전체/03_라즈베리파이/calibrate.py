@@ -39,7 +39,7 @@ WINDOW = 0.05         # 충격점수 평균시간(초). pothole_detect.py, 시�
 COOLDOWN = 2          # 이시간안의 충격은 방지턱하나로침 (앞바퀴뒷바퀴 두번쿵 포함)
 MIN_THRESHOLD = 0.15  # 기준값이 이보다낮게나오면 이걸로올림
 MIN_SPEED_KMH = 6     # 이보다느린구간은 멈춘걸로보고 결과계산때뺌 (pothole_detect.py랑같게)
-MARK_BEFORE = 1.5     # normal에서 Enter 누른시점 몇초전부터 뺄지 (누르는게 늦을수있어서)
+MARK_BEFORE = 8.0     # normal에서 Enter 누른시점 몇초전부터 뺄지 (실제로 최대 9초 늦게눌림)
 MARK_AFTER = 3.0      # Enter 누른후 몇초까지 뺄지 (뒷바퀴까지 지나가게)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

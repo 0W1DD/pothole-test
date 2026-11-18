@@ -34,6 +34,8 @@ import serial
 from smbus2 import SMBus
 from ultralytics import YOLO
 
+from uploader import upload  # Supabase 업로드 (uploader.py)
+
 # ===== 설정 =====
 CAM_URL = "http://10.194.36.252:8080/shot.jpg"  # 폰 IP Webcam 앱주소
 GPS_PORT = "/dev/ttyACM0"                         # USB GPS (G-Mouse)
@@ -52,6 +54,7 @@ PHOTO_MAX_BACK = 3.0  # 아무리느려도 이보다오래전사진은 안씀(�
 MODEL_PATH = "best_ncnn_model"  # 코랩에서 학습한모델 (포트홀+기본사물). 없으면 "yolo26n.pt" 로 바꾸면 원래대로
 POTHOLE_NAMES = {"pothole", "woodlock"}  # 이이름 잡히면 포트홀로침 (우드락실험용 포함)
 CONF = 0.25           # YOLO가 이신뢰도이상일때만 감지로침
+UPLOAD = True         # 포트홀 잡히면 Supabase에 올림 (False면 안올림)
 SAVE_BOXES = True     # 감지된사진에 네모친거 boxed/ 에따로저장함 (확인용)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -222,6 +225,20 @@ def handle(model, shock, shock_time, kmh):
     spd = f"{kmh:.0f}km/h" if kmh is not None else "속도모름"
     note = "" if gps["fix"] else "  (GPS없음: 마지막위치 또는 nogps)"
     print(f"충격 {shock:.2f}g ({spd}, {back:.2f}초전사진) → {where}/{name}  감지: {found}{note}")
+
+    if UPLOAD and is_pothole:
+        if gps["lat"] is None:
+            print("  업로드 안함: GPS위치없음")
+        else:
+            confs = [float(c) for c, k in zip(result.boxes.conf, result.boxes.cls)
+                     if result.names[int(k)] in POTHOLE_NAMES]
+            label = next(n for n in found if n in POTHOLE_NAMES)
+            # 따로 스레드로 보냄 (센서읽기 안밀리게)
+            threading.Thread(target=upload, daemon=True,
+                             args=(jpg, gps["lat"], gps["lon"]),
+                             kwargs=dict(impact=shock, kmh=kmh, label=label,
+                                         conf=max(confs))).start()
+            print("  → Supabase 업로드 보냄")
 
 
 def main():

@@ -31,3 +31,9 @@ python3 pi_blackbox_sim.py replay ../07_실차측정데이터/calib_normal.csv -
 
 측정 데이터(calib_normal.csv, threshold.json 등)는 `../07_실차측정데이터/`에 있음.
 `server.json`(서버 주소·키), 사진 폴더, 로그는 올리지 않음.
+
+## A형 실기기 (11/18 확인)
+`python3 -u pi_blackbox_sim.py sensor` → ADXL345 충격 → S23 사진 → YOLO → 위치 붙여서 Supabase 업로드
+- **S23 (카메라만)**: 파이에 USB로 꽂고 USB 디버깅 켜기(`adb devices` 에 device). 카메라 앱 화면을 `adb screenrecord`로 계속 받아 최근 2초 보관 → 충격 **0.72초 전** 프레임을 바로 씀(약 0.1초). 폰은 **가로**로 거치, 카메라 앱 버튼은 잘라냄. 영상이 끊기면 볼륨다운으로 찰칵(삼성 카메라는 KEYCODE_CAMERA 안 먹음)
+- **위치**: 운전자 폰 앱(포트홀 알리미 1.0.4-test, '운행 중 내 위치 올리기' + '안내 시작')이 2초마다 `gps_logs` 에 올림 → 충격 시각 앞뒤 두 점 보간, 뒤 점이 없으면 최근 두 점 방향·속도로 추정. 30초 넘게 없으면 테스트 좌표
+- 책상에선 기준 0.20g 이 예민해서 흔들림만으로도 올라감 → 테스트 끝나면 바로 끄기

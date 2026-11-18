@@ -1,0 +1,790 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  -webkit-text-size-adjust: 100%;
+  font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  color: #333;
+}
+
+html, body { background-color: #f7f9fa; }
+/* 💡 body 자체는 스크롤하지 않음 → 화면 바꿀 때 사파리 하단바가 접혔다 펴지며 메뉴바가 움직이는 현상 방지 */
+html, body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* ===================== 화면(뷰) 전환 ===================== */
+.view { display: none; }
+.view.active { display: block; }
+
+/* 💡 각 화면은 자기 안에서만 스크롤 (화면 크기 고정) */
+.page {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 20px 16px 120px;
+  padding-top: calc(20px + env(safe-area-inset-top));
+  background-color: #f7f9fa;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+.center { text-align: center; }
+
+h2 { text-align: center; color: #333; margin-bottom: 20px; }
+.sub { font-size: 13px; color: #666; }
+
+/* ===================== 지도 화면 ===================== */
+#map-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100lvh;
+}
+#map { width: 100%; height: 100%; }
+
+body.map-mode {
+  overflow: hidden;
+  overscroll-behavior: none;
+  height: 100lvh;
+}
+
+/* 💡 검색창 아래로 내림 */
+#count-box {
+  position: fixed;
+  top: 76px;
+  top: calc(76px + env(safe-area-inset-top));
+  left: 16px; /* 💡 검색창 아래 왼쪽 정렬 */
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: bold;
+  white-space: nowrap;
+  background-color: rgba(255, 255, 255, 0.95);
+  border-radius: 25px;
+  border: 1px solid #ddd;
+  z-index: 999;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+#today-count { color: #ff4757; } /* 💡 원래 빨간색으로 복구 */
+
+/* ===================== 지도 검색 ===================== */
+#map-search-box {
+  position: fixed;
+  top: 16px;
+  top: calc(16px + env(safe-area-inset-top));
+  left: 16px;
+  right: 16px;
+  max-width: 568px;
+  margin: 0 auto;
+  z-index: 1001;
+}
+.map-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 8px 0 16px;
+  background: white;
+  border-radius: 24px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+}
+.map-search-bar svg { flex-shrink: 0; }
+#map-search-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 16px;
+}
+#map-search-clear {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #555;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+#map-search-results {
+  display: none;
+  margin-top: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: white;
+  border-radius: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+#map-search-results.open { display: block; }
+.msr-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+}
+.msr-item:last-child { border-bottom: none; }
+.msr-item:active { background: #f5f5f5; }
+.msr-main { min-width: 0; flex: 1; }
+.msr-name {
+  font-size: 15px;
+  font-weight: bold;
+  color: #111;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msr-addr {
+  font-size: 12px;
+  color: #888;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msr-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.msr-cat { font-size: 11px; color: #2667f7; font-weight: bold; }
+.msr-dist { font-size: 12px; color: #555; }
+.msr-empty { padding: 16px; text-align: center; font-size: 14px; color: #888; }
+
+/* 검색한 장소 위 이름 라벨 */
+.search-label {
+  background: #111;
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 5px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+/* ===================== 둥근 알약형 칩 바 공통 스타일 ===================== */
+#map-chip-bar, #report-chip-bar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 2px;
+}
+
+#map-chip-bar::-webkit-scrollbar, #report-chip-bar::-webkit-scrollbar {
+  display: none;
+}
+#map-chip-bar, #report-chip-bar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* 💡 모든 알약 칩 기본 스타일 (현재 내 위치 & 입력 초기화 통일) */
+.map-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 14px;
+  background: #ffffff;
+  color: #333333;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.1s, background-color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.map-chip:active {
+  transform: scale(0.95);
+}
+
+/* 💡 '현재 내 위치' 칩도 기본 .map-chip 스타일을 그대로 따르도록 특수 스타일 제거 */
+.map-chip.chip-location {
+  /* 기본 .map-chip 스타일과 100% 동일하게 유지 */
+}
+
+/* ===================== 공통 카드 / 입력 ===================== */
+.card {
+  background: white;
+  padding: 18px;
+  margin-bottom: 15px;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+input[type="text"], textarea {
+  width: 100%;
+  padding: 11px;
+  margin-bottom: 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 16px;
+  font-family: inherit;
+}
+input[type="file"] { margin: 6px 0 4px; max-width: 100%; }
+.label { font-size: 14px; color: #555; }
+
+.row { display: flex; gap: 6px; margin-bottom: 15px; }
+.row input {
+  margin-bottom: 0;
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.btn-group { display: flex; gap: 8px; }
+.divider { border: 0; border-top: 1px solid #eee; margin: 20px 0 15px; }
+
+/* ===================== 버튼 ===================== */
+.btn {
+  background: #007BA7;
+  color: white;
+  border: none;
+  padding: 10px 15px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover { opacity: 0.9; }
+.btn-block { width: 100%; }
+.btn-lg { padding: 14px; font-size: 16px; }
+.btn-sm { padding: 6px 12px; font-size: 13px; }
+.btn-gray { background: #888; }
+.btn-orange { background: #2667f7; }
+.btn-red { background: #d9534f; }
+.btn-kakao { background: #FEE500; color: #3C1E1E; }
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ===================== 게시판 ===================== */
+.status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  font-size: 14px;
+  color: #555;
+}
+
+.review-item {
+  padding: 12px 10px;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  transition: background-color 0.2s;
+}
+.review-item:hover { background-color: #fafafa; }
+.review-item:last-child { border-bottom: none; }
+.review-date { color: #888; font-size: 13px; white-space: nowrap; }
+
+/* ===================== 게시글 상세 화면 (흰색 배경 & 둥근 카드 제거) ===================== */
+#detail-view {
+  background-color: #ffffff !important;
+}
+
+#detail-view .card {
+  background: #ffffff !important;
+  padding: 0 !important;
+  margin-bottom: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.detail-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+.review-img { max-width: 100%; height: auto; border-radius: 6px; margin-top: 10px; }
+
+.comment-box {
+  background: #f1f7fa;
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.reply-box {
+  background: #e9f3f8;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-top: 6px;
+  margin-left: 20px;
+  font-size: 13px;
+  border-left: 3px solid #007BA7;
+}
+.comment-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.comment-meta small { color: #888; font-size: 11px; }
+
+/* 💡 댓글 점 세개(⋮) 메뉴 */
+.cm-wrap { position: relative; flex-shrink: 0; }
+.cm-dots {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  font-size: 18px;
+  font-weight: bold;
+  line-height: 1;
+  color: #333;
+  cursor: pointer;
+}
+.cm-menu { top: 26px; }
+
+/* 💡 댓글 입력창 (둥근 회색 바 + 보내기 아이콘) */
+.comment-input-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 6px 6px 6px 16px;
+  background: #f1f3f5;
+  border-radius: 16px;
+}
+.comment-input-bar textarea {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  max-height: 120px;
+  margin: 0;
+  padding: 9px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  resize: none;
+  font-size: 16px;
+  line-height: 1.4;
+}
+.comment-send-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.comment-send-btn svg { width: 26px; height: 26px; }
+.comment-send-btn:active { transform: scale(0.88); }
+
+/* 💡 둥근 팝업 메뉴 (게시글 ⋮ / 댓글 ⋮ 공통) */
+.pop-menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  z-index: 200;
+  min-width: 150px;
+  padding: 0;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.97);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+  transform-origin: top right;
+}
+.pop-menu.open {
+  display: block;
+  animation: pop-in 0.15s ease-out;
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.pop-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #111;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pop-item + .pop-item { border-top: 1px solid #f0f0f0; } /* 💡 항목 사이 연한 구분선 */
+.pop-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+.pop-item:active { background: rgba(0, 0, 0, 0.05); }
+
+#board-write-fab {
+  position: fixed;
+  right: 20px;
+  bottom: calc(105px + env(safe-area-inset-bottom));
+  z-index: 99998;
+  
+  /* 💡 빨간색 신고 버튼과 동일하게 크기 50px로 조정 */
+  width: 50px;
+  height: 50px;
+  
+  border-radius: 50%;
+  border: none;
+  background: #2667f7;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25); /* 신고 버튼과 동일한 그림자 효과 */
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s;
+}
+
+#board-write-fab:active { transform: scale(0.92); }
+
+/* 💡 버튼 내부 연필 아이콘 크기 동일 비율 조정 */
+#board-write-fab img {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+/* ===================== 긴급신고 ===================== */
+#result { display: none; margin-top: 20px; text-align: left; }
+
+/* ===================== 마이페이지 ===================== */
+.profile-wrap { position: relative; display: inline-block; }
+.profile-img {
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  border: 3px solid #007BA7;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  background: #eee;
+}
+.camera-btn {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  background: #007BA7;
+  color: white;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+.camera-btn:active { transform: scale(0.9); }
+.profile-name { margin: 15px 0 5px; }
+.profile-email { margin: 0; color: #888; font-size: 13px; }
+
+/* ===================== 모달 ===================== */
+#custom-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  justify-content: center;
+  align-items: center;
+  z-index: 100000;
+}
+.modal-content {
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+  width: 300px;
+  max-width: 90%;
+  text-align: center;
+}
+#modal-message { margin: 0 0 20px; font-size: 15px; white-space: pre-line; }
+#modal-buttons .btn { flex: 1; }
+
+/* ===================== 하단 알약 네비게이션 ===================== */
+.bottom-nav-pill {
+  position: fixed;
+  left: 0;
+  right: 0;
+  margin: 0 auto;                 /* 💡 vw 계산 대신 좌우 고정 → 흔들림 방지 */
+  bottom: 25px;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  width: calc(100% - 32px);
+  max-width: 420px;
+  height: 65px;
+  -webkit-transform: translateZ(0); /* 💡 아이폰 스크롤 시 떨림 방지 */
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  z-index: 99999;
+  border-radius: 50px;
+  background-color: rgba(255, 255, 255, 0.97);
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+}
+.nav-item {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 0;
+  border-radius: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+  flex: 1 1 0;   /* 💡 4칸 모두 같은 폭 → 간격 일정 + 가운데 정렬 */
+  min-width: 0;
+  height: 50px;
+}
+.nav-label { white-space: nowrap; }
+.nav-item:active { background-color: #f0f0f0; } /* 💡 눌러도 크기 안 변함 */
+.nav-item.active { background-color: #e5e7eb; }
+.nav-label { font-size: 11px; margin-top: 4px; color: #666; font-weight: bold; }
+.nav-item.active .nav-label { color: #333; }
+
+.page, .card, .review-item span, #user-status, .profile-email, #detail-content {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+.page { width: 100%; }
+
+/* ===================== 인터랙티브 커스텀 체크박스 ===================== */
+.checklist-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.custom-chk { display: none; }
+.chk-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2.5px solid #ccc;
+  position: relative;
+  flex-shrink: 0;
+  transition: all 0.2s ease-in-out;
+}
+.chk-icon::after {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 3px;
+  width: 5px;
+  height: 10px;
+  border: solid transparent;
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+  transition: all 0.2s ease-in-out;
+}
+.custom-chk:checked + .chk-icon { border-color: #61AA65; }
+.custom-chk:checked + .chk-icon::after { border-color: #61AA65; }
+.custom-chk:active + .chk-icon { transform: scale(0.9); }
+
+/* ===================== 지도 우측 하단 신고하기 버튼 ===================== */
+#map-report-fab {
+  position: fixed;
+  right: 20px;
+  bottom: calc(105px + env(safe-area-inset-bottom));
+  z-index: 99998;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: none;
+  background: #EF4444;
+  color: white;
+  font-size: 10px;
+  font-weight: bold;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.1s;
+}
+#map-report-fab:active { transform: scale(0.92); }
+#map-report-fab .fab-icon { font-size: 16px; }
+
+/* 💡 메뉴 폭을 글자 길이에 딱 맞춤 (뒤쪽 빈 공간 제거) */
+#map-report-menu {
+  display: none;
+  position: fixed;
+  right: 20px;
+  bottom: calc(165px + env(safe-area-inset-bottom));
+  z-index: 99998;
+  background: white;
+  border-radius: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  width: max-content;
+}
+#map-report-menu.open { display: block; }
+#map-report-menu a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  font-size: 14px;
+  font-weight: bold;
+  color: #333;
+  text-decoration: none;
+  white-space: nowrap;
+}
+#map-report-menu a:active { background: #f5f5f5; }
+
+/* ===================== 내 현위치 표시 ===================== */
+.my-location-dot {
+  width: 16px;
+  height: 16px;
+  background: #3B82F6;
+  border: 3px solid white;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6);
+  animation: my-loc-pulse 2s infinite;
+}
+@keyframes my-loc-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6); }
+  70%  { box-shadow: 0 0 0 14px rgba(59, 130, 246, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
+#my-location-fab {
+  position: fixed;
+  left: 20px;
+  bottom: calc(105px + env(safe-area-inset-bottom));
+  z-index: 99998;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: none;
+  background: white;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s;
+}
+#my-location-fab:active { transform: scale(0.92); }
+/* ===================== 겹친 포트홀 목록 팝업 ===================== */
+.ph-list {
+  position: relative;
+  margin-bottom: 38px;            /* 마커(30px) 위로 띄우기 */
+  width: 190px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+  animation: pop-in 0.15s ease-out;
+}
+.ph-list::after {                 /* 아래쪽 말풍선 꼬리 */
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  transform: translateX(-50%) rotate(45deg);
+  box-shadow: 3px 3px 6px rgba(0, 0, 0, 0.08);
+}
+.ph-list-body {
+  position: relative;
+  z-index: 1;
+  max-height: 150px;              /* 약 4줄, 넘치면 스크롤 */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: #fff;
+  border-radius: 12px;
+}
+.ph-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ph-list-item + .ph-list-item { border-top: 1px solid #f3f3f3; }
+.ph-list-item:active { background: #f5f5f5; }
+.ph-list-badge {
+  flex-shrink: 0;
+  color: #fff;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.ph-list-main { flex: 1; min-width: 0; }
+.ph-list-title {
+  font-weight: bold;
+  color: #111;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-list-time { font-size: 10px; color: #888; margin-top: 1px; }
+.ph-list-arrow { flex-shrink: 0; font-size: 15px; color: #bbb; line-height: 1; }

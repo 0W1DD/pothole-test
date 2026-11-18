@@ -1,0 +1,119 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:P;font-weight:500;src:url(Pretendard-Medium.woff2)}
+@font-face{font-family:P;font-weight:600;src:url(Pretendard-SemiBold.woff2)}
+@font-face{font-family:P;font-weight:700;src:url(Pretendard-Bold.woff2)}
+html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#f4f3ee;font-family:P,sans-serif}
+#c{position:absolute;inset:0}
+#title{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(22,33,58,.92);color:#f7f6f1;opacity:0}
+#title h1{font-size:84px;font-weight:700;margin:0;letter-spacing:-1px}
+#title p{font-size:34px;font-weight:500;margin:22px 0 0;color:#f2a365}
+#cap{position:absolute;left:96px;bottom:96px;display:flex;align-items:center;gap:22px;opacity:0}
+#num{width:72px;height:72px;border-radius:36px;background:#e8772e;color:#fff;font-size:38px;font-weight:700;display:flex;align-items:center;justify-content:center}
+#txt h2{margin:0;font-size:44px;font-weight:700;color:#16213a;letter-spacing:-.5px}
+#txt p{margin:6px 0 0;font-size:28px;font-weight:500;color:#4a5568}
+#brand{position:absolute;right:96px;top:70px;font-size:26px;font-weight:600;color:#8a8f99}
+#end{position:absolute;right:120px;top:50%;transform:translateY(-50%);width:600px;opacity:0}
+#end h2{font-size:56px;font-weight:700;color:#16213a;margin:0 0 26px;letter-spacing:-1px}
+.row{display:flex;gap:16px;align-items:center;margin:14px 0;font-size:30px;font-weight:600;color:#16213a}
+.dot{width:16px;height:16px;border-radius:8px;flex:none}
+#end small{display:block;margin-top:28px;font-size:26px;color:#5a6272;font-weight:500}
+</style>
+<script type="importmap">{"imports":{"three":"./node_modules/three/build/three.module.js","three/addons/":"./node_modules/three/examples/jsm/"}}</script>
+</head><body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<div id="brand">포트홀 감지 블랙박스 · 장착 시뮬레이션</div>
+<div id="cap"><div id="num">1</div><div id="txt"><h2></h2><p></p></div></div>
+<div id="end"><h2>조립 완료</h2>
+<div class="row"><span class="dot" style="background:#2a6fd6"></span>18650 배터리 2개 · 독립 전원</div>
+<div class="row"><span class="dot" style="background:#2e9e57"></span>라즈베리파이 5 · 충격 감지 SDK</div>
+<div class="row"><span class="dot" style="background:#d33a2c"></span>가속도 센서 · 홈에 고정</div>
+<div class="row"><span class="dot" style="background:#1f3b33"></span>갤럭시 S23 · 블랙박스 카메라</div>
+<small>케이스 88 × 103 × 72mm · 나사 없이 조립</small></div>
+<div id="title"><h1>블랙박스 시제품 장착 시뮬레이션</h1><p>실제 설계 파일(3D 프린트용)로 만든 조립 과정</p></div>
+<script type="module">
+import * as THREE from 'three';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+const M = await (await fetch('v3c_meta.json')).json();
+const loader = new STLLoader();
+const names = ['p_main','p_lid','p_phone','p_cams','p_cells','p_ups','p_pi','p_ports','p_header','p_sensor','p_spins','p_plug'];
+const G = Object.fromEntries(await Promise.all(names.map(n => new Promise(r => loader.load('v3c_' + n + '.stl', g => { g.computeVertexNormals(); r([n, g]); })))));
+await document.fonts.ready;
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(1920, 1080, false); renderer.setClearColor('#f4f3ee');
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.45));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5); scene.add(sun);
+const mat = (c, o = 1, m = .05) => new THREE.MeshStandardMaterial({ color: c, roughness: .55, metalness: m, transparent: o < 1, opacity: o, side: THREE.DoubleSide });
+const mesh = (n, c, m) => { const x = new THREE.Mesh(G[n], mat(c, 1, m)); scene.add(x); return x; };
+const caseMat = mat('#ece8dc');
+const P = {
+  main: new THREE.Mesh(G.p_main, caseMat), lid: new THREE.Mesh(G.p_lid, mat('#ece8dc')),
+  phone: mesh('p_phone', '#1f3b33'), cams: mesh('p_cams', '#0b0f0e'),
+  cells: mesh('p_cells', '#2a6fd6'), ups: mesh('p_ups', '#1c1c1c'),
+  pi: mesh('p_pi', '#2e9e57'), ports: mesh('p_ports', '#b9bdc4', .4), header: mesh('p_header', '#222'),
+  sensor: mesh('p_sensor', '#d33a2c'), spins: mesh('p_spins', '#c9a227', .5), plug: mesh('p_plug', '#333'),
+};
+scene.add(P.main, P.lid);
+const stick = new THREE.Mesh(new THREE.BoxGeometry(12, 40, 4.5), mat('#a7abb3', 1, .6)); scene.add(stick);
+const stickHome = new THREE.Vector3(M.px0 + 10, M.uay + 18, M.z_pi + 11);
+function tube(pts, c, r) {
+  const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p))), 160, r, 10);
+  const m = new THREE.Mesh(g, mat(c)); scene.add(m); m.userData.n = g.index.count; return m;
+}
+const jumpers = ['#111', '#8a6a4a', '#ddd', '#555'].map((c, i) => tube([[M.hx, M.hy + i * 2.5, M.hz], [M.hx + 4, M.hy + i * 2.5, M.hz + 3], [M.sx - 2, M.hy + 10 + i * 2, M.hz - 6], [M.sx - 1, M.sy0 - 30, M.sz + 4 + i], [M.sx + 0.5, M.sy0 - 16, M.sz - 3 + i * 2.6]], c, 0.8));
+const gx = 6;
+const power = tube([[M.px0 + 8, M.uay, M.uaz], [M.px0 + 6, M.yend - 2, M.uaz - 4], [gx, M.yend - 6, 10], [gx, 140, 40], [gx - 1, 100, 12], [gx, 118, 45], [gx + 1, 140, 14], [gx, 104, 30], [M.xo0 + 5, M.usb_y + 8, M.z_pi + 2], [M.px0 - 14, M.usb_y, M.z_pi + 2]], '#111', 2.0);
+const camc = tube([[M.px0 + 28, M.uay + 2, M.z_pi + 8], [M.px0 + 28, M.yend + 14, M.z_pi + 6], [40.75, M.yend + 16, -2], [40.75, M.yend + 7, -5.75], [40.75, 166.5, -5.75]], '#2b2b2b', 2.0);
+const ease = x => x <= 0 ? 0 : x >= 1 ? 1 : x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const prog = (t, a, b) => ease((t - a) / (b - a));
+const STEPS = [
+  [3.0, 6.0, '1', '카메라(S23) 거치', '블랙박스 카메라 역할 · 렌즈는 그대로 드러나게'],
+  [6.0, 9.0, '2', '배터리 넣기', '18650 2개 · 받침 리브 위에 올림'],
+  [9.0, 11.5, '3', '라즈베리파이 올리기', '황동 기둥 6mm로 배터리판 위에 고정'],
+  [11.5, 13.5, '4', '부팅용 USB 메모리', '포트 쪽 열린 끝으로 꽂음'],
+  [13.5, 15.5, '5', '가속도 센서 끼우기', '바닥 홈에 세워서 끼움 · 나사 필요 없음'],
+  [15.5, 18.5, '6', '선 연결', '점퍼선 · 전원선 · S23 카메라 선을 안쪽 칸에 정리'],
+  [18.5, 21.0, '7', '뚜껑 닫기', '안쪽 기둥이 파이와 센서를 위에서 눌러 고정'],
+];
+const $ = id => document.getElementById(id);
+window.setT = (t) => {
+  const off = (m, v) => m.position.copy(v);
+  const pPhone = prog(t, 3.2, 5.6), pBat = prog(t, 6.2, 8.6), pPi = prog(t, 9.1, 11.2), pStick = prog(t, 11.6, 13.2);
+  const pSen = prog(t, 13.6, 15.2), pLid = prog(t, 18.6, 20.8);
+  const ph = new THREE.Vector3(0, -190 * (1 - pPhone), 0); off(P.phone, ph); off(P.cams, ph);
+  P.phone.visible = P.cams.visible = t > 3.0;
+  const bz = new THREE.Vector3(0, 0, 130 * (1 - pBat)); off(P.cells, bz); off(P.ups, bz); P.cells.visible = P.ups.visible = t > 6.0;
+  const pz = new THREE.Vector3(0, 0, 130 * (1 - pPi)); ['pi', 'ports', 'header'].forEach(k => { off(P[k], pz); P[k].visible = t > 9.0; });
+  stick.position.copy(stickHome).add(new THREE.Vector3(0, 70 * (1 - pStick), 0)); stick.visible = t > 11.5;
+  const sz = new THREE.Vector3(0, 0, 100 * (1 - pSen)); off(P.sensor, sz); off(P.spins, sz); P.sensor.visible = P.spins.visible = t > 13.5;
+  const grow = (m, a, b) => { const p = prog(t, a, b); m.visible = p > 0; m.geometry.setDrawRange(0, Math.floor(m.userData.n * p / 3) * 3); };
+  jumpers.forEach((m, i) => grow(m, 15.6 + i * .15, 16.9 + i * .15));
+  grow(power, 16.2, 18.0); grow(camc, 16.9, 18.4);
+  P.plug.visible = t > 17.6;
+  P.lid.position.set(0, 0, 140 * (1 - pLid)); P.lid.visible = t > 18.5;
+  const see = t > 6 && t < 18.6 ? 1 : 0;
+  caseMat.transparent = true; caseMat.opacity = 1 - 0.62 * see * Math.min(1, (t - 6) / .6, (18.6 - t) / .6 + 0.0001); caseMat.depthWrite = caseMat.opacity > .99;
+  P.main.renderOrder = 2;
+  // 카메라
+  const a = -2.3 + t * 0.09 + (t > 21 ? (t - 21) * 0.32 : 0);
+  const r = 600 - Math.min(t, 21) * 2.5;
+  const el = t < 13.5 ? 0.62 : 0.62 + 0.18 * prog(t, 13.5, 15.5) - 0.18 * prog(t, 18.6, 21);
+  const tgt = new THREE.Vector3(40, 118, 15);
+  const cam = new THREE.PerspectiveCamera(26, 1920 / 1080, 1, 5000); cam.up.set(0, 0, 1);
+  cam.position.set(tgt.x + r * Math.cos(a) * Math.cos(el), tgt.y + r * Math.sin(a) * Math.cos(el), tgt.z + r * Math.sin(el));
+  cam.lookAt(tgt);
+  const sh = -230 + 650 * prog(t, 21, 22.6);
+  cam.setViewOffset(1920, 1080, sh, 0, 1920, 1080);
+  sun.position.copy(cam.position).add(new THREE.Vector3(0, 0, 200));
+  renderer.render(scene, cam);
+  // 글자
+  const tt = Math.max(0, Math.min(1, t / .4, (3.0 - t) / .5));
+  $('title').style.opacity = t < 3 ? tt : 0;
+  const s = STEPS.find(s => t >= s[0] && t < s[1]);
+  if (s) { $('num').textContent = s[2]; $('txt').querySelector('h2').textContent = s[3]; $('txt').querySelector('p').textContent = s[4];
+    $('cap').style.opacity = Math.min(1, (t - s[0]) / .3, (s[1] - t) / .3); } else $('cap').style.opacity = 0;
+  $('end').style.opacity = Math.max(0, Math.min(1, (t - 22) / .6));
+};
+window.setT(0); window.ready = true;
+</script></body></html>

@@ -212,6 +212,7 @@
         <option value="300">300m</option><option value="500">500m</option><option value="1000">1km</option>
       </select>
       <label style="display:block; margin:12px 0;"><input id="nearby-voice" type="checkbox" checked style="width:auto;"> 음성 안내 켜기</label>
+      <label style="display:block; margin:12px 0;"><input id="nearby-upload" type="checkbox" style="width:auto;"> 운행 중 내 위치 서버에 올리기 (블랙박스 위치 맞추기용, 2초마다)</label>
       <div class="btn-group" style="gap:8px;">
         <button id="nearby-start" class="btn">안내 시작</button>
         <button id="nearby-stop" class="btn btn-gray">안내 중지</button>
@@ -306,7 +307,7 @@
   </nav>
 
   <!-- 필수 스크립트 연결 -->
-  <script src="nearby-alerts.js?v=1"></script>
+  <script src="nearby-alerts.js?v=2"></script>
   <script src="blackbox-wifi.js?v=1"></script>
   <script src="app.js?v=20261117"></script>
 

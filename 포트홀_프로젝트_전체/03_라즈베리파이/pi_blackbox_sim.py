@@ -26,6 +26,7 @@
 """
 import glob
 import json
+import math
 import os
 import random
 import sys
@@ -107,17 +108,28 @@ def gps_thread():
 def find_location(t_event):
     if gps_now["lat"] is not None and t_event - gps_now["t"] < 5:
         return gps_now["lat"], gps_now["lon"], "USB GPS"
-    try:   # 폰 앱이 올린 gps_logs 에서 충격시간이랑 제일 가까운거
+    try:   # 폰 앱이 올린 gps_logs 로 충격시각 위치 계산 (앞뒤 두 점 사이 보간, 뒤가 없으면 최근 두 점으로 이어서 추정)
         r = requests.get(f"{URL}/rest/v1/gps_logs?select=lat,lon,created_at&order=created_at.desc&limit=50",
                          headers=HDR, timeout=10)
-        best = None
-        for g in r.json():
-            ts = datetime.fromisoformat(g["created_at"].replace("Z", "+00:00")).timestamp()
-            d = abs(ts - t_event)
-            if best is None or d < best[0]:
-                best = (d, g["lat"], g["lon"])
-        if best and best[0] <= GPS_MATCH_SEC:
-            return best[1], best[2], f"폰 gps_logs (시간차 {best[0]:.0f}초)"
+        pts = sorted((datetime.fromisoformat(g["created_at"].replace("Z", "+00:00")).timestamp(), g["lat"], g["lon"])
+                     for g in r.json() if g.get("lat") is not None)
+        if pts and min(abs(p[0] - t_event) for p in pts) <= GPS_MATCH_SEC:
+            before = [p for p in pts if p[0] <= t_event]
+            after = [p for p in pts if p[0] > t_event]
+            if before and after and after[0][0] - before[-1][0] <= 15:          # ① 앞뒤 사이 보간
+                (t1, la1, lo1), (t2, la2, lo2) = before[-1], after[0]
+                f = (t_event - t1) / (t2 - t1)
+                return la1 + (la2 - la1) * f, lo1 + (lo2 - lo1) * f, f"폰 gps_logs 보간 ({t_event - t1:.1f}초/{t2 - t1:.1f}초 지점)"
+            if len(before) >= 2:                                                 # ② 최근 두 점 방향·속도로 이어서 추정
+                (t1, la1, lo1), (t2, la2, lo2) = before[-2], before[-1]
+                dt = t_event - t2
+                k_lat, k_lon = 111320, 111320 * math.cos(math.radians(la2))     # 도 → m
+                v = math.hypot((la2 - la1) * k_lat, (lo2 - lo1) * k_lon) / max(t2 - t1, 0.1)
+                if 0 < t2 - t1 <= 15 and dt <= 10 and v < 40:                    # 이상한값(점프, 144km/h↑)이면 안씀
+                    f = dt / (t2 - t1)
+                    return la2 + (la2 - la1) * f, lo2 + (lo2 - lo1) * f, f"폰 gps_logs 추정 (마지막위치+{dt:.1f}초, {v * 3.6:.0f}km/h)"
+            t, la, lo = min(pts, key=lambda p: abs(p[0] - t_event))             # ③ 제일 가까운 점
+            return la, lo, f"폰 gps_logs (시간차 {abs(t - t_event):.0f}초)"
     except Exception as e:
         print("    gps_logs 읽기 실패:", e)
     return TEST_LAT + random.uniform(-0.002, 0.002), TEST_LON + random.uniform(-0.002, 0.002), "테스트좌표"
@@ -170,7 +182,7 @@ def adb(*args, timeout=10):
 
 
 def adb_photo():
-    """무선디버깅으로 붙은 폰에서 사진 1장 찍어서 jpg bytes 로. 폰 없으면 None"""
+    """adb(USB/무선)로 붙은 폰에서 사진 1장 찍어서 jpg bytes 로. 폰 없으면 None"""
     try:
         if not any(l.endswith("\tdevice") for l in adb("devices").splitlines()):
             return None
@@ -178,8 +190,8 @@ def adb_photo():
         before = last()
         adb("shell", "input keyevent KEYCODE_WAKEUP")
         adb("shell", "am start -a android.media.action.STILL_IMAGE_CAMERA")
-        time.sleep(1.5)
-        adb("shell", "input keyevent KEYCODE_CAMERA")
+        time.sleep(2)                            # 카메라 뜰때까지
+        adb("shell", "input keyevent KEYCODE_VOLUME_DOWN")   # 삼성카메라는 CAMERA키 말고 볼륨다운으로 찍힘
         for _ in range(10):                      # 저장될때까지 최대 5초
             time.sleep(0.5)
             new = last()
@@ -193,6 +205,63 @@ def adb_photo():
     except Exception as e:
         print("    adb 사진 실패:", e)
         return None
+
+
+class ScreenStream:
+    """S23 카메라 앱 화면을 USB(adb screenrecord)로 계속 받아서 최근 2초 보관.
+    충격나면 grab(충격시각 - photo_back) 으로 그 순간 프레임을 바로 꺼냄 (찰칵 기다릴 필요 없음).
+    폰은 가로로 거치. 왼쪽 셔터버튼·오른쪽 아이콘은 잘라내고 가운데만 씀."""
+    SIZE = "1544x720"                 # S23 화면(3088x1440) 절반
+    CROP_X = (450, 1430)              # 카메라앱 버튼 빼고 가운데
+    KEEP_SEC = 2.0
+
+    def __init__(self):
+        from collections import deque
+        self.frames = deque()         # (받은시각, av.VideoFrame)
+        self.lock = threading.Lock()
+        self.ok = False
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        import av
+        while True:
+            try:
+                adb("shell", "input keyevent KEYCODE_WAKEUP")
+                adb("shell", "am start -a android.media.action.STILL_IMAGE_CAMERA")
+                time.sleep(2)
+                p = subprocess.Popen(["adb", "exec-out", "screenrecord", "--output-format=h264",
+                                      f"--size={self.SIZE}", "--time-limit=180", "-"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                for f in av.open(p.stdout, format="h264").decode(video=0):
+                    now = time.time()
+                    with self.lock:
+                        self.frames.append((now, f))
+                        while self.frames and now - self.frames[0][0] > self.KEEP_SEC:
+                            self.frames.popleft()
+                    if not self.ok:
+                        self.ok = True
+                        print("  S23 화면 영상 받는중 ✓ (충격 순간 프레임 바로 사용)")
+                p.kill()
+            except Exception as e:
+                print("  S23 영상 끊김, 다시 연결:", e)
+            self.ok = False
+            time.sleep(1)                 # 3분마다 screenrecord 끝나면 바로 다시
+
+    def grab(self, t_want):
+        """t_want 시각에 제일 가까운 프레임 → 가운데 잘라서 jpg bytes. 최근 1초 안에 영상 없으면 None"""
+        import cv2
+        with self.lock:
+            if not self.frames or time.time() - self.frames[-1][0] > 1.0:
+                return None
+            t, f = min(self.frames, key=lambda tf: abs(tf[0] - t_want))
+        img = f.to_ndarray(format="bgr24")
+        if img.shape[1] > img.shape[0]:   # 가로일때만 버튼 자르기
+            img = img[:, self.CROP_X[0]:self.CROP_X[1]]
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes() if ok else None
+
+
+stream = None                         # sensor/key 모드에서 켬
 
 
 def yolo_check(jpg):
@@ -299,9 +368,13 @@ def on_event(ev, t_event, loc=None):
     print(f"\n★ 충격감지! 점수 {ev.score_mg/1000:.2f}g (기준 {ev.threshold_mg/1000:.2f}g), 사진은 {ev.photo_back_ms}ms 전 프레임")
     lat, lon, src = loc if loc else find_location(t_event)
     print(f"    위치 {lat:.6f}, {lon:.6f} ← {src}")
-    jpg = adb_photo()                            # A형: S23 찍기 → YOLO → 결과상관없이 업로드
+    jpg = stream.grab(t_event - ev.photo_back_ms / 1000) if stream else None   # 충격 0.7초전 화면
     if jpg:
-        from uploader import shrink, upload      # 01_pi/uploader.py (줄이기, Storage, 실패시 pending)
+        print(f"    S23 영상에서 {ev.photo_back_ms}ms 전 프레임 사용")
+    else:
+        jpg = adb_photo()                        # 영상 없으면 예전방식(볼륨다운 찰칵)
+    if jpg:
+        from uploader import shrink, upload      # 같은 폴더 uploader.py (줄이기, Storage, 실패시 pending)
         jpg = shrink(jpg)
         label, conf, found = yolo_check(jpg)
         os.makedirs(os.path.join(HERE, "sim_photos"), exist_ok=True)
@@ -310,7 +383,7 @@ def on_event(ev, t_event, loc=None):
         print(f"    S23 사진 {len(jpg)//1024}KB → YOLO {tag} ({label} {conf}) 전체: {found}")
         row = upload(jpg, lat, lon, impact=round(ev.score_mg / 1000, 3), label=label, conf=conf,
                      title="블랙박스 자동감지 (A형 시뮬)")
-        print("    업로드 ✓ " + row["image_url"] if row else "    업로드 실패 → 01_pi/pending_uploads 에 보관")
+        print("    업로드 ✓ " + row["image_url"] if row else "    업로드 실패 → pending_uploads 에 보관")
         return
     print("    S23 연결 안됨 → 예전방식(사진없이)")
     photo, psrc = take_photo(t_event)
@@ -335,6 +408,9 @@ def make_detector():
 
 # ---------------- 모드1: Enter 치면 가짜 충격 ----------------
 def run_key():
+    global stream
+    if not (PHONE_MODE or SERVE_MODE):
+        stream = ScreenStream()
     d = make_detector()
     d.set_speed(kmh=30)                      # 시속 30km 가정 (사진시점 계산용)
     print("Enter 치면 방지턱/포트홀 넘은것처럼 충격 만들어서 SDK에 넣음 (끝: Ctrl+C)")
@@ -354,8 +430,11 @@ def run_key():
             print("  (쿨다운 2초 안이라 무시됨. 조금 있다 다시)")
 
 
-# ---------------- 모드3: 진짜 ADXL345 센서 (02_sdk/examples/pi_adxl.py 방식) ----------------
+# ---------------- 모드3: 진짜 ADXL345 센서 (04_충격감지_SDK_C/examples/pi_adxl.py 방식) ----------------
 def run_sensor():
+    global stream
+    if not (PHONE_MODE or SERVE_MODE):
+        stream = ScreenStream()
     from smbus2 import SMBus
     ADDR = 0x53
     bus = SMBus(1)

@@ -44,6 +44,13 @@ public class NearbyAlertService extends Service implements LocationListener {
     private long lastAttempt, lastSuccess;
     private double queryRange = 2000;
     private volatile HttpURLConnection activeRequest;
+    // 운행 중 내 위치 → gps_logs (라즈베리파이 블랙박스가 충격 시각 위치를 찾을 때 씀)
+    private static final long UPLOAD_EVERY_MS = 2000, GPS_FAST_MS = 1000, GPS_NORMAL_MS = 5000;
+    private static final float UPLOAD_MAX_ACCURACY_M = 30f;
+    private final ExecutorService uploadIo = Executors.newSingleThreadExecutor();
+    private boolean upload, uploading;
+    private long lastUploadedFixNanos, uploadCount;
+    private String uploadStatus = "";
 
     private static final class Point {
         final String id;
@@ -63,6 +70,9 @@ public class NearbyAlertService extends Service implements LocationListener {
         result.put("voice", active && service.voice);
         result.put("voiceStatus", active ? service.voiceStatus : "");
         result.put("records", active ? service.points.size() : 0);
+        result.put("upload", active && service.upload);
+        result.put("uploadCount", active ? service.uploadCount : 0);
+        result.put("uploadStatus", active ? service.uploadStatus : "");
         result.put("notificationsEnabled", androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled());
         result.put("warningChannelEnabled", Build.VERSION.SDK_INT < 26 ||
                 context.getSystemService(NotificationManager.class).getNotificationChannel(WARNINGS) == null ||
@@ -104,6 +114,7 @@ public class NearbyAlertService extends Service implements LocationListener {
             radius = intent.getIntExtra("radius", 200);
             if (radius < 50 || radius > 1000) throw new IllegalArgumentException("안내 거리가 올바르지 않습니다.");
             voice = intent.getBooleanExtra("voice", true);
+            boolean wantUpload = intent.getBooleanExtra("upload", false);
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
                 throw new SecurityException("정확한 위치 권한을 허용하세요.");
             if (!androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled())
@@ -115,12 +126,17 @@ public class NearbyAlertService extends Service implements LocationListener {
             if (!running) {
                 loadConfiguration();
                 running = true;
-                locations.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 0, this, Looper.getMainLooper());
-                if (locations.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
-                    locations.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000, 0, this, Looper.getMainLooper());
+                upload = wantUpload;
+                requestUpdates();
                 initializeSpeech();
                 main.post(tick);
+                main.post(uploader);
+            } else if (upload != wantUpload) {
+                upload = wantUpload;                     // '설정 적용': GPS 주기만 바꿈
+                locations.removeUpdates(this);
+                requestUpdates();
             }
+            if (!upload) uploadStatus = "";
             if (!voice && tts != null) { tts.stop(); abandonFocus(); }
             if (result != null) result.send(0, Bundle.EMPTY);
         } catch (Exception error) {
@@ -131,6 +147,57 @@ public class NearbyAlertService extends Service implements LocationListener {
         // Never restart location silently after a process kill/reboot; the user starts from a visible screen.
         return START_NOT_STICKY;
     }
+
+    @SuppressWarnings("MissingPermission")
+    private void requestUpdates() {
+        long every = upload ? GPS_FAST_MS : GPS_NORMAL_MS;
+        locations.requestLocationUpdates(LocationManager.GPS_PROVIDER, every, 0, this, Looper.getMainLooper());
+        if (locations.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
+            locations.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, GPS_NORMAL_MS, 0, this, Looper.getMainLooper());
+    }
+
+    /** 2초마다 가장 최근 GPS 위치(정확도 30m 이내, 새 위치일 때만)를 gps_logs 에 올림. 실패하면 그 위치는 버림(실시간용). */
+    private final Runnable uploader = new Runnable() {
+        @Override public void run() {
+            if (!running) return;
+            main.postDelayed(this, UPLOAD_EVERY_MS);
+            if (!upload || uploading || fix == null) return;
+            if (!LocationManager.GPS_PROVIDER.equals(fix.getProvider())) return;
+            if (!fix.hasAccuracy() || fix.getAccuracy() > UPLOAD_MAX_ACCURACY_M) { uploadStatus = "GPS 정확도 기다리는 중"; return; }
+            long age = (SystemClock.elapsedRealtimeNanos() - fix.getElapsedRealtimeNanos()) / 1000000;
+            if (age > 5000 || fix.getElapsedRealtimeNanos() == lastUploadedFixNanos) return;
+            final Location sent = new Location(fix);
+            lastUploadedFixNanos = sent.getElapsedRealtimeNanos();
+            uploading = true;
+            uploadIo.execute(() -> {
+                String error = null;
+                try {
+                    JSONObject row = new JSONObject();
+                    row.put("lat", Math.round(sent.getLatitude() * 1e6) / 1e6);
+                    row.put("lon", Math.round(sent.getLongitude() * 1e6) / 1e6);
+                    HttpURLConnection connection = (HttpURLConnection) new URL(endpoint + "/rest/v1/gps_logs").openConnection();
+                    try {
+                        connection.setConnectTimeout(4000); connection.setReadTimeout(4000);
+                        connection.setInstanceFollowRedirects(false); connection.setUseCaches(false);
+                        connection.setRequestMethod("POST"); connection.setDoOutput(true);
+                        connection.setRequestProperty("apikey", publicKey);
+                        connection.setRequestProperty("Content-Type", "application/json");
+                        connection.setRequestProperty("Prefer", "return=minimal");
+                        try (OutputStream out = connection.getOutputStream()) { out.write(row.toString().getBytes(StandardCharsets.UTF_8)); }
+                        int status = connection.getResponseCode();
+                        if (status < 200 || status >= 300) error = "HTTP " + status;
+                    } finally { connection.disconnect(); }
+                } catch (Exception e) { error = e.getMessage() == null ? "연결 실패" : e.getMessage(); }
+                final String failure = error;
+                main.post(() -> {
+                    uploading = false;
+                    if (!running) return;
+                    if (failure == null) { uploadCount++; uploadStatus = "위치 전송 " + uploadCount + "회"; }
+                    else { uploadStatus = "위치 전송 실패 · 인터넷 확인"; android.util.Log.w("NearbyAlerts", "gps_logs: " + failure); }
+                });
+            });
+        }
+    };
 
     private void loadConfiguration() throws Exception {
         try (InputStream input = getAssets().open("public/nearby-alert-config.json")) {
@@ -185,7 +252,7 @@ public class NearbyAlertService extends Service implements LocationListener {
 
     private String message() {
         if (!freshFix()) return "정확한 GPS 위치를 기다리고 있습니다. 위치 기능을 켜 주세요.";
-        return "반경 " + radius + "m 안내 중 · " + dataStatus;
+        return "반경 " + radius + "m 안내 중 · " + dataStatus + (upload && !uploadStatus.isEmpty() ? " · " + uploadStatus : "");
     }
 
     private void fetchPoints(Location center) {
@@ -341,6 +408,8 @@ public class NearbyAlertService extends Service implements LocationListener {
 
     private void cleanup() {
         main.removeCallbacks(tick);
+        main.removeCallbacks(uploader);
+        uploadIo.shutdownNow();
         if (locations != null) {
             try { locations.removeUpdates(this); } catch (SecurityException ignored) { }
         }

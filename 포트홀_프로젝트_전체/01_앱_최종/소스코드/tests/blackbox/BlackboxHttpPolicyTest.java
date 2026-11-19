@@ -14,7 +14,7 @@ public final class BlackboxHttpPolicyTest {
         throw new AssertionError("Expected rejection");
     }
     public static void main(String[] args) throws Exception {
-        for (String path : new String[] { "/index.json", "/photos/a.jpg", "/photos/%ED%8F%AC.jpg?x=1" }) {
+        for (String path : new String[] { "/index.json", "/photos/a.jpg", "/photos/%ED%8F%AC.jpg?x=1", "/clips/impact_001.mp4" }) {
             if (!BlackboxHttpPolicy.target("http://10.42.0.1:8080" + path).getHost().equals("10.42.0.1"))
                 throw new AssertionError();
             checks++;
@@ -33,6 +33,19 @@ public final class BlackboxHttpPolicyTest {
                 System.nanoTime() + TimeUnit.SECONDS.toNanos(5));
         if (!Arrays.equals(input, output)) throw new AssertionError("Exact limit rejected");
         checks++;
+        if (BlackboxHttpPolicy.MAX_BYTES != 8 * 1024 * 1024)
+            throw new AssertionError("Expected the existing 8 MiB raw response limit");
+        checks++;
+        for (int size : new int[] { 1024 * 1024, 5 * 1024 * 1024, BlackboxHttpPolicy.MAX_BYTES }) {
+            byte[] clip = new byte[size];
+            for (int i = 0; i < clip.length; i++) clip[i] = (byte) i;
+            byte[] received = BlackboxHttpPolicy.read(new ByteArrayInputStream(clip),
+                    BlackboxHttpPolicy.MAX_BYTES, Long.MAX_VALUE);
+            if (!Arrays.equals(clip, received)) throw new AssertionError("Video bytes changed at size " + size);
+            checks++;
+        }
+        rejects(() -> BlackboxHttpPolicy.read(new ByteArrayInputStream(new byte[BlackboxHttpPolicy.MAX_BYTES + 1]),
+                BlackboxHttpPolicy.MAX_BYTES, Long.MAX_VALUE));
         rejects(() -> BlackboxHttpPolicy.read(new ByteArrayInputStream(input), 4, Long.MAX_VALUE));
         rejects(() -> BlackboxHttpPolicy.read(new ByteArrayInputStream(input), 5, System.nanoTime() - 1));
         if (BlackboxHttpPolicy.read(null, 0, Long.MAX_VALUE).length != 0) throw new AssertionError();

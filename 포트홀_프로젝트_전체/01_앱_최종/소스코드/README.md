@@ -53,12 +53,14 @@ PR #3에서 가져온 `.github/workflows/final-app.yml`이 최종 앱을 자동 
 
 이번 검증: JavaScript 36개 테스트, Java HTTP 정책 30개·전방 안내 정책 34개·GPS 업로드 정책 11개 검사. 위치 업로드 옵션 전달, 2초/1초 주기 상수, GPS 품질/중복 필터, 좌표 없는 B형 영상의 보완, 기존 좌표 유지, GPS 실패 시 null 업로드 방지, 보관 영상 재시도를 포함합니다. 실기기/서버 검증은 아래 항목으로 별도 확인해야 합니다.
 
-네이티브 정책은 기존 `tests/blackbox/README.md` 방식으로 `BlackboxHttpPolicyTest`와 `NearbyAlertPolicyTest`를 JDK에서 실행할 수 있습니다.
+네이티브 정책은 기존 `tests/blackbox/README.md` 방식으로 `BlackboxHttpPolicyTest`, `NearbyAlertPolicyTest`, `GpsUploadPolicyTest`, `ImpactLocationPolicyTest`를 JDK에서 실행할 수 있습니다.
 
 ## 실기기/서버 검증 체크리스트 — 현재 미확인
 
-- 비로그인 상태로 1~5MB 영상 수신 → 앱 재시작 → 같은 데이터 보관 → 카카오 로그인 시 업로드.
+- 충격 시각에 GPS가 기록된 상태에서 비로그인으로 1~5MB 영상 수신 → 앱 재시작 → 같은 데이터 보관 → 카카오 로그인 시 업로드.
 - 운행 중 위치 업로드를 켠 뒤 화면을 꺼도 gps_logs에 2초 주기로 최신 위치가 들어오는지와 파이의 해당 위치 조회 확인.
+- 실제 충격 장소를 지난 뒤 다른 장소에서 영상 수신: 업로드 좌표가 충격 시각의 기록인지 확인. 화면 꺼짐·앱 재시작 후에도 기록 조회 확인.
+- GPS 기록 없는 과거 영상·7일 지난 영상·파이 시각 불일치: 현재 위치로 대체하지 않고 보관되는지 확인.
 - 서버 없는 상태/네트워크 단절/목록 저장 실패 → 데이터 보존과 재시도, 중복 객체·목록 없음.
 - 계정 A 영상 업로드 → 로그아웃 → 계정 B 목록·Storage 접근 불가. A 보관 영상은 B로 업로드되지 않음.
 - 1시간 임시 URL 만료, 로그아웃 시 플레이어 즉시 제거. MP4 코덱 실제 재생 확인.

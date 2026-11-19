@@ -24,3 +24,16 @@ test('PR3 upload option survives settings UI, native forwarding and saved prefer
   elements['nearby-upload'].checked = false; await elements['nearby-start'].onclick();
   assert.equal(received.upload, false); assert.equal(saved.upload, false);
 });
+
+
+test('historical location wrapper forwards impact time to native plugin', async () => {
+  let received;
+  const window = { Capacitor: { Plugins: { NearbyAlerts: {
+    locationAt: async options => { received = options; return { latitude: 37, longitude: 127 }; }
+  } } }, addEventListener() {} };
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../../www/nearby-alerts.js'), 'utf8'), {
+    window, document: { readyState: 'complete', getElementById: () => null, addEventListener() {} }
+  });
+  const result = await window.NearbyAlerts.locationAt(1795040000000);
+  assert.equal(received.timestamp, 1795040000000); assert.equal(result.latitude, 37);
+});

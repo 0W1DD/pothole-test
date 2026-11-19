@@ -22,19 +22,24 @@
   class Queue {
     constructor(store, client, camera, user) { Object.assign(this, { store, client, camera, user }); }
     async ensureLocation(item) {
+      if (item.locationSource === 'phone_at_receipt') {
+        item.metadata.lat = null; item.metadata.lon = null;
+        delete item.locationTimestamp; delete item.locationSource;
+      }
       const { lat, lon } = item.metadata;
       if (typeof lat === 'number' && Number.isFinite(lat) && Math.abs(lat) <= 90
           && typeof lon === 'number' && Number.isFinite(lon) && Math.abs(lon) <= 180) return;
-      // B-type Pi records have no GPS. Save the phone fix at receipt/retry, not a fabricated historical fix.
-      const fix = await this.camera.currentPosition();
-      const age = Date.now() - fix.timestamp;
-      if (!Number.isFinite(fix.latitude) || Math.abs(fix.latitude) > 90
+      // Match the measurement time to the impact; never substitute the download location.
+      const timestamp = Date.parse(item.metadata.captured_at);
+      const fix = await this.camera.locationAt(timestamp);
+      const delta = Math.abs(fix?.timestamp - timestamp);
+      if (!fix || !Number.isFinite(fix.latitude) || Math.abs(fix.latitude) > 90
           || !Number.isFinite(fix.longitude) || Math.abs(fix.longitude) > 180
           || !Number.isFinite(fix.accuracy) || fix.accuracy <= 0 || fix.accuracy > 30
-          || !Number.isFinite(age) || age < 0 || age > 30000)
-        throw new Error('정확한 폰 GPS 위치를 기다려 주세요 (정확도 30m 이내).');
+          || !Number.isFinite(delta) || delta > 2000)
+        throw new Error('충격 시각의 GPS 기록이 없습니다. 영상은 폰에 보관합니다.');
       item.metadata.lat = fix.latitude; item.metadata.lon = fix.longitude;
-      item.locationSource = 'phone_at_receipt'; item.locationTimestamp = fix.timestamp;
+      item.locationSource = 'phone_at_impact'; item.locationTimestamp = fix.timestamp;
     }
     async receive(device, row) {
       const item = record(device, row);
@@ -44,7 +49,7 @@
       if (used + MAX_BYTES > MAX_QUEUE) throw new Error('폰의 영상 대기 공간이 가득 찼습니다. 업로드 후 다시 가져오세요.');
       // Bind logged-in imports before network I/O; an account switch must not reassign them.
       item.owner = this.user();
-      await this.ensureLocation(item);
+      try { await this.ensureLocation(item); } catch (_) { /* Keep the clip offline until its impact can be located. */ }
       const blob = await this.camera.getVideoBlob(item.source);
       if (!(blob instanceof Blob) || blob.size === 0 || blob.size > MAX_BYTES) throw new Error('영상 크기가 올바르지 않습니다.');
       item.blob = blob;
@@ -55,6 +60,7 @@
       const owner = this.user();
       if (!owner) return;
       const same = () => { if (this.user() !== owner) throw new Error('계정이 변경되어 업로드를 중단했습니다.'); };
+      let missing = 0;
       for (const item of await this.store.all()) {
         same();
         if (item.done || (item.owner && item.owner !== owner)) continue;
@@ -66,8 +72,10 @@
         same();
         if (existing.error) throw new Error('내 영상 표 조회 실패: ' + existing.error.message);
         if (!existing.data.length) {
-          // Also repair locally queued 1.0.5 entries before their first successful upload.
-          await this.ensureLocation(item);
+          // Re-resolve legacy receipt locations too; one missing fix must not block other clips.
+          try { await this.ensureLocation(item); } catch (_) {
+            same(); await this.store.put(item); missing++; continue;
+          }
           same();
           await this.store.put(item);
           same();
@@ -89,6 +97,7 @@
         item.done = true; delete item.blob;
         await this.store.put(item);
       }
+      if (missing) throw new Error('충격 시각의 GPS 기록이 없는 영상 ' + missing + '개는 폰에 보관 중입니다.');
     }
   }
   function openStore(indexedDB) {

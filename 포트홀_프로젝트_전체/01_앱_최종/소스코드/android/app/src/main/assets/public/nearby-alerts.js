@@ -8,7 +8,8 @@
   window.NearbyAlerts = Object.freeze({
     start: (radius = 300, voice = true, upload = false) => native().start({ radius, voice, upload }),
     stop: () => native().stop(),
-    status: () => native().status()
+    status: () => native().status(),
+    locationAt: timestamp => native().locationAt({ timestamp })
   });
   function setup() {
     const panel = document.getElementById('nearby-alert-panel');

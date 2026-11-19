@@ -4,7 +4,10 @@
   const client = supabaseClient;
   let owner = null, epoch = 0, working = false, page = 0, playTimer;
   const store = PrivateVideoCore.openStore(window.indexedDB);
-  const queue = new PrivateVideoCore.Queue(store, client, BlackboxWifi, () => owner);
+  const queue = new PrivateVideoCore.Queue(store, client, {
+    getVideoBlob: path => BlackboxWifi.getVideoBlob(path),
+    locationAt: timestamp => NearbyAlerts.locationAt(timestamp)
+  }, () => owner);
   const state = byId('video-state'), list = byId('video-list'), player = byId('private-video-player');
   function stopVideo() { clearTimeout(playTimer); player.pause(); player.removeAttribute('src'); player.load(); player.hidden = true; }
   function errorMessage(error) { return error?.message || String(error); }

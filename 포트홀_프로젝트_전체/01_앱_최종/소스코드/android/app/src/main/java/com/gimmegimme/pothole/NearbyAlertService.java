@@ -238,6 +238,7 @@ public class NearbyAlertService extends Service implements LocationListener {
                 && (SystemClock.elapsedRealtimeNanos() - fix.getElapsedRealtimeNanos()) < TimeUnit.SECONDS.toNanos(10)
                 && location.getAccuracy() > fix.getAccuracy() * 2) return;
         fix = new Location(location);
+        if (upload) ImpactLocationStore.get(this).record(location);
         if (!fetching && (lastAttempt == 0 || SystemClock.elapsedRealtime() - lastAttempt >= 30000)) fetchPoints(new Location(fix));
         checkNearby();
     }

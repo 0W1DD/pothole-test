@@ -91,6 +91,15 @@ public class NearbyAlertsPlugin extends Plugin {
         catch (Exception error) { reject("안내를 시작하지 못했습니다. 앱을 화면에 연 상태에서 다시 시도하세요."); }
     }
 
+    @PluginMethod public void locationAt(PluginCall call) {
+        Double timestamp = call.getDouble("timestamp");
+        if (timestamp == null || !Double.isFinite(timestamp) || timestamp != Math.floor(timestamp)
+                || timestamp <= 0 || timestamp > System.currentTimeMillis()) {
+            call.reject("충격 시각이 올바르지 않습니다. 파이 시각을 확인하세요."); return;
+        }
+        ImpactLocationStore.get(getContext()).lookup(timestamp.longValue(), call);
+    }
+
     @PluginMethod public void status(PluginCall call) {
         main.post(() -> call.resolve(NearbyAlertService.snapshot(getContext())));
     }

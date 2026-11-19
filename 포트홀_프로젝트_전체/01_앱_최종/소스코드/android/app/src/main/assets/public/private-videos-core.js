@@ -21,6 +21,21 @@
   }
   class Queue {
     constructor(store, client, camera, user) { Object.assign(this, { store, client, camera, user }); }
+    async ensureLocation(item) {
+      const { lat, lon } = item.metadata;
+      if (typeof lat === 'number' && Number.isFinite(lat) && Math.abs(lat) <= 90
+          && typeof lon === 'number' && Number.isFinite(lon) && Math.abs(lon) <= 180) return;
+      // B-type Pi records have no GPS. Save the phone fix at receipt/retry, not a fabricated historical fix.
+      const fix = await this.camera.currentPosition();
+      const age = Date.now() - fix.timestamp;
+      if (!Number.isFinite(fix.latitude) || Math.abs(fix.latitude) > 90
+          || !Number.isFinite(fix.longitude) || Math.abs(fix.longitude) > 180
+          || !Number.isFinite(fix.accuracy) || fix.accuracy <= 0 || fix.accuracy > 30
+          || !Number.isFinite(age) || age < 0 || age > 30000)
+        throw new Error('정확한 폰 GPS 위치를 기다려 주세요 (정확도 30m 이내).');
+      item.metadata.lat = fix.latitude; item.metadata.lon = fix.longitude;
+      item.locationSource = 'phone_at_receipt'; item.locationTimestamp = fix.timestamp;
+    }
     async receive(device, row) {
       const item = record(device, row);
       if (await this.store.get(item.key)) return false;
@@ -29,6 +44,7 @@
       if (used + MAX_BYTES > MAX_QUEUE) throw new Error('폰의 영상 대기 공간이 가득 찼습니다. 업로드 후 다시 가져오세요.');
       // Bind logged-in imports before network I/O; an account switch must not reassign them.
       item.owner = this.user();
+      await this.ensureLocation(item);
       const blob = await this.camera.getVideoBlob(item.source);
       if (!(blob instanceof Blob) || blob.size === 0 || blob.size > MAX_BYTES) throw new Error('영상 크기가 올바르지 않습니다.');
       item.blob = blob;
@@ -50,6 +66,11 @@
         same();
         if (existing.error) throw new Error('내 영상 표 조회 실패: ' + existing.error.message);
         if (!existing.data.length) {
+          // Also repair locally queued 1.0.5 entries before their first successful upload.
+          await this.ensureLocation(item);
+          same();
+          await this.store.put(item);
+          same();
           const uploaded = await this.client.storage.from('pothole-videos').upload(path, item.blob,
             { contentType: 'video/mp4', upsert: false });
           same();

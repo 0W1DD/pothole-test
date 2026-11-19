@@ -212,6 +212,7 @@
         <option value="300" selected>300m</option><option value="500">500m</option><option value="1000">1km</option>
       </select>
       <label style="display:block; margin:12px 0;"><input id="nearby-voice" type="checkbox" checked style="width:auto;"> 음성 안내 켜기</label>
+      <label style="display:block; margin:12px 0;"><input id="nearby-upload" type="checkbox" style="width:auto;"> 운행 중 내 위치 서버에 올리기 (블랙박스 위치 맞추기용, 2초마다)</label>
       <div class="btn-group" style="gap:8px;">
         <button id="nearby-start" class="btn">안내 시작</button>
         <button id="nearby-stop" class="btn btn-gray">안내 중지</button>
@@ -233,6 +234,7 @@
     <div id="private-videos-panel" class="card">
       <h3>내 블랙박스 영상</h3>
       <p>블랙박스에 연결한 뒤 영상을 가져오세요. 로그인 전에는 폰에 보관하고, 로그인하면 내 계정으로 업로드합니다.</p>
+      <p class="sub">영상 기록에 좌표가 없으면 가져오는 시점의 폰 GPS 위치를 저장합니다. 과거 영상을 나중에 가져오면 충격 당시 위치와 다를 수 있습니다. 정확한 위치를 얻지 못하면 업로드하지 않고 재시도를 안내합니다.</p>
       <p class="sub">기록의 clips/파일명.mp4에는 앞의 /를 자동으로 붙입니다. 서버 저장 경로는 내 사용자 ID/기기_충격시각.mp4입니다.</p>
       <button id="video-import" class="btn">블랙박스 영상 가져오기</button>
       <button id="video-sync" class="btn btn-gray">보관 영상 업로드 재시도</button>
@@ -330,7 +332,7 @@
   </nav>
 
   <!-- 필수 스크립트 연결 -->
-  <script src="nearby-alerts.js?v=1"></script>
+  <script src="nearby-alerts.js?v=2"></script>
   <script src="blackbox-wifi.js?v=1"></script>
   <script src="app.js?v=20261117"></script>
   <script src="private-videos-core.js?v=20261119"></script>

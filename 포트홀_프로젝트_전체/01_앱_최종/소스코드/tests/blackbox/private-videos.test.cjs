@@ -29,7 +29,8 @@ function fixture() {
       }
     }; }
   };
-  const camera = { async getVideoBlob(path) { downloads++; assert.equal(path, '/clips/00001.mp4');
+  const camera = { async currentPosition() { return { latitude: 36.1, longitude: 127.1, accuracy: 5, timestamp: Date.now() }; },
+    async getVideoBlob(path) { downloads++; assert.equal(path, '/clips/00001.mp4');
     if (faults.download) throw new Error('Wi-Fi lost');
     return new Blob([new Uint8Array([0, 128, 255])], { type: 'video/mp4' }); } };
   const queue = new Queue(store, client, camera, () => owner);
@@ -58,6 +59,7 @@ test('anonymous import survives IndexedDB reopen and uploads on login only', asy
   assert.equal(f.rows[0].path, 'user-A/pi-blackbox_' + row.t_ms + '.mp4');
   assert.equal(f.rows[0].user_id, 'user-A');
   assert.equal(f.rows[0].impact, 2.1);
+  assert.equal(f.rows[0].lat, 36.1); assert.equal(f.rows[0].lon, 127.1);
   assert.equal((await f.store.get(saved.key)).blob, undefined);
   await f.queue.receive('pi-blackbox', row); await f.queue.flush();
   assert.equal(f.downloads(), 1); assert.equal(f.uploads.length, 1); assert.equal(f.rows.length, 1);
@@ -112,4 +114,45 @@ test('full offline queue is bounded before another camera download', async () =>
   const f = fixture();
   await f.store.put({ key: 'full', blob: new Blob([new Uint8Array(100 * 1024 * 1024)]) });
   await assert.rejects(f.queue.receive('pi-blackbox', row), /공간/); assert.equal(f.downloads(), 0);
+});
+
+test('B-type clip saves phone GPS at receipt and keeps that fix across offline upload retry', async () => {
+  const f = fixture(); await f.queue.receive('pi-blackbox', row);
+  const saved = (await f.store.all())[0];
+  assert.equal(saved.locationSource, 'phone_at_receipt');
+  assert.ok(Date.now() - saved.locationTimestamp < 30000);
+  f.camera.currentPosition = async () => { throw new Error('GPS unavailable later'); };
+  f.login('user-A'); await f.queue.flush();
+  assert.equal(f.rows[0].lat, 36.1); assert.equal(f.rows[0].lon, 127.1);
+  assert.equal(f.rows[0].captured_at, new Date(row.t_ms).toISOString());
+});
+test('valid coordinates from the Pi are preserved without requesting phone GPS', async () => {
+  const f = fixture(); f.camera.currentPosition = async () => { assert.fail('GPS must not override record location'); };
+  await f.queue.receive('pi-blackbox', { ...row, lat: 37, lon: 128 });
+  f.login('user-A'); await f.queue.flush();
+  assert.equal(f.rows[0].lat, 37); assert.equal(f.rows[0].lon, 128);
+});
+test('missing, denied, stale, inaccurate and invalid phone GPS never upload null coordinates', async () => {
+  for (const fix of [null,
+    { latitude: 37, longitude: 127, accuracy: 31, timestamp: Date.now() },
+    { latitude: 37, longitude: 127, accuracy: 5, timestamp: Date.now() - 30001 },
+    { latitude: 37, longitude: 127, accuracy: 5, timestamp: Date.now() + 60000 },
+    { latitude: NaN, longitude: 127, accuracy: 5, timestamp: Date.now() },
+    { latitude: 37, longitude: 181, accuracy: 5, timestamp: Date.now() },
+    { latitude: 37, longitude: 127, accuracy: NaN, timestamp: Date.now() }]) {
+    const f = fixture(); f.login('user-A');
+    f.camera.currentPosition = async () => { if (!fix) throw new Error('GPS permission denied'); return fix; };
+    await assert.rejects(f.queue.receive('pi-blackbox', row), /GPS/);
+    assert.equal(f.downloads(), 0); assert.equal((await f.store.all()).length, 0); assert.equal(f.rows.length, 0);
+  }
+});
+test('queued 1.0.5 clip missing location is repaired before upload and retained on GPS failure', async () => {
+  const f = fixture(); f.login('user-A');
+  await f.store.put({ ...record('pi-blackbox', row), owner: 'user-A', blob: new Blob(['clip']) });
+  const original = f.camera.currentPosition;
+  f.camera.currentPosition = async () => { throw new Error('GPS denied'); };
+  await assert.rejects(f.queue.flush(), /GPS/);
+  assert.equal(f.uploads.length, 0); assert.ok((await f.store.all())[0].blob);
+  f.camera.currentPosition = original; await f.queue.flush();
+  assert.equal(f.rows[0].lat, 36.1); assert.equal(f.rows[0].lon, 127.1);
 });

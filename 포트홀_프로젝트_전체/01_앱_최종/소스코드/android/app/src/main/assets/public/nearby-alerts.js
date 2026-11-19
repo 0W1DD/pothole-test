@@ -6,7 +6,7 @@
     return plugin;
   };
   window.NearbyAlerts = Object.freeze({
-    start: (radius = 300, voice = true) => native().start({ radius, voice }),
+    start: (radius = 300, voice = true, upload = false) => native().start({ radius, voice, upload }),
     stop: () => native().stop(),
     status: () => native().status()
   });
@@ -14,26 +14,28 @@
     const panel = document.getElementById('nearby-alert-panel');
     if (!panel) return;
     const byId = id => document.getElementById(id);
-    const radius = byId('nearby-radius'), voice = byId('nearby-voice'), state = byId('nearby-state');
+    const radius = byId('nearby-radius'), voice = byId('nearby-voice'), upload = byId('nearby-upload'), state = byId('nearby-state');
     const start = byId('nearby-start'), stop = byId('nearby-stop');
     let busy = false, timer;
     try {
       const stored = JSON.parse(localStorage.getItem('nearby-alert-options') || '{}');
       if ([100, 200, 300, 500, 1000].includes(stored.radius)) radius.value = String(stored.radius);
       if (typeof stored.voice === 'boolean') voice.checked = stored.voice;
+      if (upload && typeof stored.upload === 'boolean') upload.checked = stored.upload;
     } catch (_) { }
     function show(status) {
       state.textContent = status.message + (status.running && status.voice ? ' · ' + status.voiceStatus : '');
+      if (status.running && status.upload && !status.uploadStatus) state.textContent += ' · 위치 전송 대기';
       if (status.running && (!status.notificationsEnabled || !status.warningChannelEnabled)) {
         state.textContent += ' · 앱 설정에서 주변 포트홀 알림을 켜 주세요.';
       }
       stop.disabled = busy || !status.running;
       start.disabled = busy;
       start.textContent = status.running ? '설정 적용' : '안내 시작';
-      if (status.running && !busy && document.activeElement !== radius && document.activeElement !== voice) {
+      if (status.running && !busy && document.activeElement !== radius && document.activeElement !== voice && document.activeElement !== upload) {
         // Only hydrate once; polling must not overwrite a setting being edited.
         if (!panel.dataset.hydrated) {
-          radius.value = String(status.radius); voice.checked = status.voice; panel.dataset.hydrated = '1';
+          radius.value = String(status.radius); voice.checked = status.voice; if (upload) upload.checked = !!status.upload; panel.dataset.hydrated = '1';
         }
       }
     }
@@ -46,8 +48,8 @@
       finally { busy = false; start.disabled = false; stop.disabled = false; }
     }
     start.onclick = () => run(async () => {
-      const options = { radius: Number(radius.value), voice: voice.checked };
-      const result = await window.NearbyAlerts.start(options.radius, options.voice);
+      const options = { radius: Number(radius.value), voice: voice.checked, upload: !!(upload && upload.checked) };
+      const result = await window.NearbyAlerts.start(options.radius, options.voice, options.upload);
       try { localStorage.setItem('nearby-alert-options', JSON.stringify(options)); } catch (_) { }
       panel.dataset.hydrated = '1'; show(result);
     });

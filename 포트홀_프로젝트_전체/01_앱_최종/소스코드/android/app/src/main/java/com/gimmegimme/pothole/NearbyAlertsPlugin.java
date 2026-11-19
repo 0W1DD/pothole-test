@@ -78,6 +78,7 @@ public class NearbyAlertsPlugin extends Plugin {
         Intent intent = new Intent(getContext(), NearbyAlertService.class);
         intent.putExtra("radius", call.getInt("radius", 300));
         intent.putExtra("voice", Boolean.TRUE.equals(call.getBoolean("voice", true)));
+        intent.putExtra("upload", Boolean.TRUE.equals(call.getBoolean("upload", false)));
         intent.putExtra("result", new ResultReceiver(main) {
             @Override protected void onReceiveResult(int code, Bundle data) {
                 if (pending != call) return;

@@ -1,7 +1,7 @@
-description: Ultralytics YOLO26n model trained on /content/merged/data.yaml
+description: Ultralytics YOLO26n model trained on C:\Users\이세인\Documents\ChatGPT\포트홀\yolo-local\data.local.yaml
 author: Ultralytics
-date: '2026-10-21T03:24:44.230559+00:00'
-version: 8.4.183
+date: "2026-11-18T20:42:39.514512+09:00"
+version: "8.4.215"
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
 stride: 32
@@ -94,8 +94,8 @@ names:
   79: toothbrush
   80: pothole
   81: Sewage-Manhole
+  82: speed_bump
 args:
-  batch: 1
   quantize: null
 channels: 3
 end2end: false

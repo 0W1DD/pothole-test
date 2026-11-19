@@ -1,0 +1,15 @@
+{
+  "source": "best_83classes_speedbump.pt",
+  "source_sha256": "020057194d5776e37a91f33eb0fcaddfb02ad920e8bdd0e2681c9f4ffe7a2126",
+  "ultralytics": "8.4.215",
+  "format": "ncnn",
+  "imgsz": 640,
+  "device": "cpu",
+  "blank_image_smoke_test": "passed",
+  "files": {
+    "metadata.yaml": "1c42c381737e56bb7a661bb3a8068ad57358788c086a7fae6b978af53ad83dbc",
+    "model.ncnn.bin": "cd7d111bdbcdb354aba06ed63923d1a21b34d97e31565568c1e222dd18843d0d",
+    "model.ncnn.param": "c7757a900051245340be8bec5df07034f4d8ba3fe1536fe2b810fb215c0afab2",
+    "model_ncnn.py": "8f3597d0259f129b85ded06d51e06a24c825541cdc4f80f42b5f7b0791c20750"
+  }
+}

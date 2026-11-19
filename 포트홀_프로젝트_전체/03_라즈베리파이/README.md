@@ -37,3 +37,14 @@ python3 pi_blackbox_sim.py replay ../07_실차측정데이터/calib_normal.csv -
 - **S23 (카메라만)**: 파이에 USB로 꽂고 USB 디버깅 켜기(`adb devices` 에 device). 카메라 앱 화면을 `adb screenrecord`로 계속 받아 최근 2초 보관 → 충격 **0.72초 전** 프레임을 바로 씀(약 0.1초). 폰은 **가로**로 거치, 카메라 앱 버튼은 잘라냄. 영상이 끊기면 볼륨다운으로 찰칵(삼성 카메라는 KEYCODE_CAMERA 안 먹음)
 - **위치**: 운전자 폰 앱(포트홀 알리미 1.0.4-test, '운행 중 내 위치 올리기' + '안내 시작')이 2초마다 `gps_logs` 에 올림 → 충격 시각 앞뒤 두 점 보간, 뒤 점이 없으면 최근 두 점 방향·속도로 추정. 30초 넘게 없으면 테스트 좌표
 - 책상에선 기준 0.20g 이 예민해서 흔들림만으로도 올라감 → 테스트 끝나면 바로 끄기
+
+## 11/19 추가: 영상 클립 · 실차 점검 · 실차 기록 · 83클래스 모델
+- **충격 앞뒤 10초 영상**: S23 화면 영상을 줄여서 10.5초 들고 있다가 충격 나면 앞 10초 + 뒤 10초를 다시 압축(libx264) → mp4 약 1~2MB (608×448, 카메라 앱 버튼 잘라냄)
+  - A형(`sensor`): `drives/<날짜_시각>/clips/<충격ms>.mp4`, `events.json` 에 `video`
+  - B형(`sensor --serve`): `b_store/clips/00001.mp4`, `index.json` 각 기록에 `video`("clips/00001.mp4", 앞에 / 없음 — photo 와 같은 형식), `video_start_ms`, `video_end_ms`
+  - 폰 앱은 `http://10.42.0.1:8080/clips/00001.mp4` 로 받음 (PR #4 `getVideoBlob`)
+  - B형은 껐다 켜도 기록 번호를 이어서 붙임 (예전 사진 안 덮어씀)
+- **`python3 car_check.py`**: 실차 출발 전 점검 (센서, 전원/온도, S23 연결·배터리·화면 방향·영상, 서버, 폰 gps_logs, YOLO). 업로드 안 함
+- **센서 모드 실차 기록**: `drives/<날짜_시각>/` 에 `calib_normal.csv`(calibrate.py 형식), 방지턱 지날 때 Enter → `calib_normal_marks.json`, 감지 기록 `events.json`
+- **`bash drive_result.sh [drives/...]`**: 실차 결과 한번에 (표시 몇 곳 잡았나, 오감지 중 AI가 거른 수, YOLO 방지턱 판정 수, SDK replay, 기준값 재계산 — 이 폴더 threshold.json 은 안 건드림)
+- **YOLO 모델**: `best.pt`, `best_ncnn_model/` 을 팀원 83클래스 모델(`speed_bump` 추가, 11/18)로 교체. 체크섬은 `best_ncnn_model/manifest.json`

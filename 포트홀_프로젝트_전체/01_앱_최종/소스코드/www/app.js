@@ -830,6 +830,8 @@ function popReturnView() {
 
 async function loginWithKakao() {
   saveReturnView();
+  // 💡 폰 앱이면 딥링크로 앱에 돌아오는 방식 (native-auth.js). 웹사이트는 아래 기존 방식
+  if (window.NativeAuth && window.NativeAuth.isNative()) return window.NativeAuth.login('profile_nickname,profile_image');
   const { error } = await supabaseClient.auth.signInWithOAuth({
     provider: 'kakao', options: { redirectTo: window.location.origin + window.location.pathname, queryParams: { scope: 'profile_nickname,profile_image' } }
   });

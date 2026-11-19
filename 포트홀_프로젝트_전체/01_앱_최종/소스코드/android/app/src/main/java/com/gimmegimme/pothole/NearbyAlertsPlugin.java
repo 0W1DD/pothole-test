@@ -35,7 +35,7 @@ public class NearbyAlertsPlugin extends Plugin {
     @PluginMethod public void start(PluginCall call) {
         main.post(() -> {
             if (pending != null || permissionsInFlight) { call.reject("이전 권한 요청을 완료해 주세요."); return; }
-            int radius = call.getInt("radius", 200);
+            int radius = call.getInt("radius", 300);
             if (radius < 50 || radius > 1000) { call.reject("안내 거리는 50~1000m로 설정해 주세요."); return; }
             pending = call;
             if (allowed()) launch(call);
@@ -76,7 +76,7 @@ public class NearbyAlertsPlugin extends Plugin {
             reject("휴대폰의 위치 기능을 켜 주세요."); return;
         }
         Intent intent = new Intent(getContext(), NearbyAlertService.class);
-        intent.putExtra("radius", call.getInt("radius", 200));
+        intent.putExtra("radius", call.getInt("radius", 300));
         intent.putExtra("voice", Boolean.TRUE.equals(call.getBoolean("voice", true)));
         intent.putExtra("result", new ResultReceiver(main) {
             @Override protected void onReceiveResult(int code, Bundle data) {

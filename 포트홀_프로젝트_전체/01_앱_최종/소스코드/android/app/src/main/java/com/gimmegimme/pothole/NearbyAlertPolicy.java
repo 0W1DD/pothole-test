@@ -9,6 +9,37 @@ public final class NearbyAlertPolicy {
     public static final long GAP_MS = 30 * 1000L;
     private final Map<String, Long> notified = new HashMap<>();
     private long lastAlert = Long.MIN_VALUE;
+    private final Map<String, Integer> stages = new HashMap<>();
+    private long lastStageAlert = Long.MIN_VALUE;
+
+    public static double bearing(double lat1, double lon1, double lat2, double lon2) {
+        double d = Math.toRadians(lon2 - lon1), a = Math.toRadians(lat1), b = Math.toRadians(lat2);
+        return (Math.toDegrees(Math.atan2(Math.sin(d) * Math.cos(b),
+                Math.cos(a) * Math.sin(b) - Math.sin(a) * Math.cos(b) * Math.cos(d))) + 360) % 360;
+    }
+
+    public static boolean ahead(double heading, double targetBearing) {
+        if (!Double.isFinite(heading) || !Double.isFinite(targetBearing)) return false;
+        double delta = ((targetBearing - heading) % 360 + 540) % 360 - 180;
+        return Math.abs(delta) <= 30;
+    }
+
+    public static int stage(double meters) {
+        if (!Double.isFinite(meters) || meters < 0 || meters > 300) return 0;
+        return meters <= 50 ? 50 : meters <= 100 ? 100 : 300;
+    }
+
+    public boolean eligibleAhead(String id, double meters, int radius, double heading, double bearing, long now) {
+        int next = stage(meters);
+        Integer previous = stages.get(id);
+        return next > 0 && meters <= radius && ahead(heading, bearing)
+                && (previous == null || next < previous)
+                && (lastStageAlert == Long.MIN_VALUE || now - lastStageAlert >= 5000);
+    }
+
+    public void markAhead(String id, double meters, long now) {
+        stages.put(id, stage(meters)); lastStageAlert = now;
+    }
 
     public static double distance(double lat1, double lon1, double lat2, double lon2) {
         double a = Math.pow(Math.sin(Math.toRadians(lat2 - lat1) / 2), 2)

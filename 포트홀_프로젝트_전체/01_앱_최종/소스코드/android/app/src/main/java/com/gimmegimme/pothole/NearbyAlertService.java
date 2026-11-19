@@ -36,7 +36,7 @@ public class NearbyAlertService extends Service implements LocationListener {
     private AudioFocusRequest focus;
     private TextToSpeech tts;
     private boolean ttsReady, running, fetching, voice = true;
-    private int radius = 200;
+    private int radius = 300;
     private String endpoint, publicKey;
     private String dataStatus = "주변 포트홀 정보를 기다리고 있습니다.", voiceStatus = "음성 엔진 준비 중";
     private Location fix, queryCenter;
@@ -59,7 +59,7 @@ public class NearbyAlertService extends Service implements LocationListener {
         boolean active = service != null && service.running;
         result.put("running", active);
         result.put("message", active ? service.message() : lastMessage);
-        result.put("radius", active ? service.radius : 200);
+        result.put("radius", active ? service.radius : 300);
         result.put("voice", active && service.voice);
         result.put("voiceStatus", active ? service.voiceStatus : "");
         result.put("records", active ? service.points.size() : 0);
@@ -101,7 +101,7 @@ public class NearbyAlertService extends Service implements LocationListener {
         }
         ResultReceiver result = intent.getParcelableExtra("result");
         try {
-            radius = intent.getIntExtra("radius", 200);
+            radius = intent.getIntExtra("radius", 300);
             if (radius < 50 || radius > 1000) throw new IllegalArgumentException("안내 거리가 올바르지 않습니다.");
             voice = intent.getBooleanExtra("voice", true);
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
@@ -254,25 +254,29 @@ public class NearbyAlertService extends Service implements LocationListener {
 
     private void checkNearby() {
         if (!running || !freshFix() || queryCenter == null || SystemClock.elapsedRealtime() - lastSuccess > 5 * 60000) return;
+        // GPS course is meaningful only while moving; never announce a guessed direction.
+        if (!fix.hasBearing() || !fix.hasSpeed() || fix.getSpeed() < 1f) return;
+        if (Build.VERSION.SDK_INT >= 26 && fix.hasBearingAccuracy() && fix.getBearingAccuracyDegrees() > 30) return;
         if (NearbyAlertPolicy.distance(fix.getLatitude(), fix.getLongitude(), queryCenter.getLatitude(), queryCenter.getLongitude()) + radius > queryRange) return;
         Point nearest = null;
         double distance = Double.MAX_VALUE;
         long now = SystemClock.elapsedRealtime();
         for (Point point : points) {
             double meters = NearbyAlertPolicy.distance(fix.getLatitude(), fix.getLongitude(), point.latitude, point.longitude);
-            if (meters < distance && policy.eligible(point.id, meters, radius, now)) { nearest = point; distance = meters; }
+            double bearing = NearbyAlertPolicy.bearing(fix.getLatitude(), fix.getLongitude(), point.latitude, point.longitude);
+            if (meters < distance && policy.eligibleAhead(point.id, meters, radius, fix.getBearing(), bearing, now)) { nearest = point; distance = meters; }
         }
         if (nearest == null) return;
         if (!androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()) return;
         if (Build.VERSION.SDK_INT >= 26 && notices.getNotificationChannel(WARNINGS).getImportance() == NotificationManager.IMPORTANCE_NONE) return;
-        String message = "주변 약 " + Math.max(10, Math.round(distance / 10) * 10) + "미터에 포트홀이 있습니다. 주의하세요.";
+        String message = "전방 " + Math.max(10, Math.round(distance / 10) * 10) + "미터에 포트홀이 있습니다. 감속하세요.";
         notices.notify(WARNING_ID, new NotificationCompat.Builder(this, WARNINGS)
                 .setSmallIcon(R.drawable.ic_nearby_warning).setContentTitle("주변 포트홀 주의")
                 .setContentText(message).setStyle(new NotificationCompat.BigTextStyle().bigText(message))
                 .setContentIntent(openApp()).setAutoCancel(true).setTimeoutAfter(60000)
                 .setPriority(NotificationCompat.PRIORITY_HIGH).setDefaults(Notification.DEFAULT_ALL)
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build());
-        policy.mark(nearest.id, now);
+        policy.markAhead(nearest.id, distance, now);
         if (voice) speak(message);
     }
 

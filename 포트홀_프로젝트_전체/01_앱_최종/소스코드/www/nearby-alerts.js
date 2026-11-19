@@ -6,7 +6,7 @@
     return plugin;
   };
   window.NearbyAlerts = Object.freeze({
-    start: (radius = 200, voice = true) => native().start({ radius, voice }),
+    start: (radius = 300, voice = true) => native().start({ radius, voice }),
     stop: () => native().stop(),
     status: () => native().status()
   });

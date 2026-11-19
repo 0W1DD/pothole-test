@@ -19,6 +19,27 @@ let currentReviewId = null;
 let kakaoMap = null;
 let activeInfoWindow = null; 
 let gpsMarker = null;
+let detectedMarker = null;
+window.showDetectedPothole = function (row) {
+  if (!Number.isFinite(row.lat) || !Number.isFinite(row.lon) || Math.abs(row.lat) > 90 || Math.abs(row.lon) > 180) return;
+  let attempts = 0;
+  const open = () => {
+    if (!kakaoMap) {
+      if (++attempts < 40) setTimeout(open, 500);
+      else showAlert('지도를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
+      return;
+    }
+    myLocationCentered = true;
+    go('map');
+    const position = new kakao.maps.LatLng(row.lat, row.lon);
+    kakaoMap.relayout(); kakaoMap.setLevel(3); kakaoMap.setCenter(position);
+    if (detectedMarker) detectedMarker.setMap(null);
+    detectedMarker = new kakao.maps.Marker({ position, map: kakaoMap });
+    const entry = potholeEntries.find(e => e.uid === String(row.id));
+    if (entry) openPotholeInfo(entry);
+  };
+  open();
+};
 
 let currentSearchKeyword = ''; 
 const RECENT_SEARCH_KEY = 'pothole_recent_searches'; 

@@ -8,8 +8,8 @@ def test_inference():
     out = []
 
     with ncnn.Net() as net:
-        net.load_param("/content/drive/MyDrive/pothole_yolo/pothole_coco/weights/best_ncnn_model/model.ncnn.param")
-        net.load_model("/content/drive/MyDrive/pothole_yolo/pothole_coco/weights/best_ncnn_model/model.ncnn.bin")
+        net.load_param("road83_ncnn_model/model.ncnn.param")
+        net.load_model("road83_ncnn_model/model.ncnn.bin")
 
         with net.create_extractor() as ex:
             ex.input("in0", ncnn.Mat(in0.squeeze(0).numpy()).clone())

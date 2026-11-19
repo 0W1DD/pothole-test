@@ -92,13 +92,16 @@ def gps_thread():
         ser = serial.Serial("/dev/ttyACM0", 9600, timeout=1)
     except Exception:
         return
-    print("  USB GPS 찾음 → GPS로 위치 붙임")
+    found = False                                # S23을 USB로 꽂아도 ttyACM0 이 생겨서, 진짜 GPS 문장 올때만 찾음 표시
     while True:
         line = ser.readline().decode("ascii", errors="ignore").strip()
         if line[3:6] != "RMC":
             continue
         try:
             m = pynmea2.parse(line)
+            if not found:
+                found = True
+                print("  USB GPS 찾음 → GPS로 위치 붙임", flush=True)
             if m.status == "A":
                 gps_now.update(lat=m.latitude, lon=m.longitude, t=time.time())
         except Exception:
@@ -210,14 +213,21 @@ def adb_photo():
 class ScreenStream:
     """S23 카메라 앱 화면을 USB(adb screenrecord)로 계속 받아서 최근 2초 보관.
     충격나면 grab(충격시각 - photo_back) 으로 그 순간 프레임을 바로 꺼냄 (찰칵 기다릴 필요 없음).
+    save_clip(): 작게 줄인 화면을 10.5초 들고 있다가 충격 앞뒤 10초를 새로 압축해서 mp4로 저장
+    (S23 screenrecord 는 키프레임이 화면이 크게 바뀔때만 나와서 그냥 잘라붙이기가 안 됨 → 다시 압축)
     폰은 가로로 거치. 왼쪽 셔터버튼·오른쪽 아이콘은 잘라내고 가운데만 씀."""
     SIZE = "1544x720"                 # S23 화면(3088x1440) 절반
+    BITRATE = 2_000_000               # USB로 받는 영상 2Mbps
     CROP_X = (450, 1430)              # 카메라앱 버튼 빼고 가운데
-    KEEP_SEC = 2.0
+    KEEP_SEC = 2.0                    # 원본 프레임 (사진/YOLO용)
+    CLIP_W, CLIP_H = 960, 448         # 클립용으로 줄인 크기
+    CLIP_CROP = "608:448:280:0"       # 줄인 화면에서 버튼 빼고 가운데 (CROP_X 를 960/1544 배)
+    KEEP_CLIP_SEC = 10.5              # 클립용 프레임 보관 (앞 10초)
 
     def __init__(self):
         from collections import deque
         self.frames = deque()         # (받은시각, av.VideoFrame)
+        self.small = deque()          # (받은시각, 줄인 yuv420p 프레임) 클립용
         self.lock = threading.Lock()
         self.ok = False
         threading.Thread(target=self._loop, daemon=True).start()
@@ -230,14 +240,27 @@ class ScreenStream:
                 adb("shell", "am start -a android.media.action.STILL_IMAGE_CAMERA")
                 time.sleep(2)
                 p = subprocess.Popen(["adb", "exec-out", "screenrecord", "--output-format=h264",
-                                      f"--size={self.SIZE}", "--time-limit=180", "-"],
+                                      f"--size={self.SIZE}", f"--bit-rate={self.BITRATE}", "--time-limit=180", "-"],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                for f in av.open(p.stdout, format="h264").decode(video=0):
+                c = av.open(p.stdout, format="h264")
+                vs = c.streams.video[0]
+                for pkt in c.demux(vs):
+                    if not pkt.size:
+                        continue
                     now = time.time()
+                    frames = pkt.decode()
+                    smalls = [f.reformat(width=self.CLIP_W, height=self.CLIP_H, format="yuv420p") for f in frames]
                     with self.lock:
-                        self.frames.append((now, f))
+                        for f in frames:
+                            self.frames.append((now, f))
                         while self.frames and now - self.frames[0][0] > self.KEEP_SEC:
                             self.frames.popleft()
+                        for f in smalls:
+                            self.small.append((now, f))
+                        while self.small and now - self.small[0][0] > self.KEEP_CLIP_SEC:
+                            self.small.popleft()
+                    if not frames:
+                        continue
                     if not self.ok:
                         self.ok = True
                         print("  S23 화면 영상 받는중 ✓ (충격 순간 프레임 바로 사용)")
@@ -246,6 +269,46 @@ class ScreenStream:
                 print("  S23 영상 끊김, 다시 연결:", e)
             self.ok = False
             time.sleep(1)                 # 3분마다 screenrecord 끝나면 바로 다시
+
+    def save_clip(self, t_event, path, before=10.0, after=10.0, done=None):
+        """충격 앞뒤 영상을 mp4로. 앞부분은 지금 바로 챙기고, after초 기다렸다가 뒷부분 붙여서 압축. done(info 또는 None)"""
+        with self.lock:
+            head = [x for x in self.small if x[0] >= t_event - before]
+
+        def work():
+            time.sleep(max(0, t_event + after - time.time()) + 0.3)
+            info = None
+            try:
+                with self.lock:
+                    tail = [x for x in self.small if (head[-1][0] if head else t_event - before) < x[0] <= t_event + after]
+                fr = head + tail
+                if len(fr) < 30:
+                    raise RuntimeError(f"영상 프레임이 너무 적음 ({len(fr)}장, S23 화면 꺼짐/연결 끊김?)")
+                dur = fr[-1][0] - fr[0][0]
+                fps = (len(fr) - 1) / dur if dur > 0 else 25
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                p = subprocess.Popen(["nice", "-n", "15", "ffmpeg", "-y", "-loglevel", "error",
+                                      "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{self.CLIP_W}x{self.CLIP_H}",
+                                      "-r", f"{fps:.3f}", "-i", "-", "-vf", f"crop={self.CLIP_CROP}",
+                                      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-threads", "2",
+                                      "-pix_fmt", "yuv420p", "-movflags", "+faststart", path],
+                                     stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+                for _, f in fr:
+                    p.stdin.write(f.to_ndarray().tobytes())
+                p.stdin.close()
+                err = p.stderr.read().decode(errors="ignore")
+                if p.wait(timeout=120):
+                    raise RuntimeError("ffmpeg: " + err[-200:])
+                info = {"start_ms": int(fr[0][0] * 1000), "end_ms": int(fr[-1][0] * 1000),
+                        "before_s": round(t_event - fr[0][0], 1), "after_s": round(fr[-1][0] - t_event, 1),
+                        "mb": round(os.path.getsize(path) / 1e6, 1)}
+                print(f"\n  🎬 영상 저장 {os.path.basename(path)}: 충격 {info['before_s']}초 전 ~ "
+                      f"{info['after_s']}초 후, {info['mb']}MB", flush=True)
+            except Exception as e:
+                print(f"\n  🎬 영상 저장 실패: {e}", flush=True)
+            if done:
+                done(info)
+        threading.Thread(target=work, daemon=True).start()
 
     def grab(self, t_want):
         """t_want 시각에 제일 가까운 프레임 → 가운데 잘라서 jpg bytes. 최근 1초 안에 영상 없으면 None"""
@@ -308,22 +371,42 @@ B_DIR = os.path.join(HERE, "b_store")
 b_records = []
 
 
-def b_save(ev, t_event):
-    """B형: 기록을 파이 안에만 저장하고 index.json 갱신 (블랙박스 SD카드처럼)"""
-    os.makedirs(os.path.join(B_DIR, "photos"), exist_ok=True)
-    t_ms = int(t_event * 1000)
-    rec = {"id": (b_records[-1]["id"] + 1) if b_records else 1, "t_ms": t_ms,
-           "photo_ms": t_ms - int(ev.photo_back_ms), "score": round(ev.score_mg / 1000, 3),
-           "speed_kmh": ev.speed_kmh, "photo": None}
-    photo, _ = take_photo(t_event)                 # 파이 카메라 있으면 그 사진도 같이 (없으면 폰이 찍음)
-    if photo:
-        name = f"{rec['id']:05d}.jpg"
-        os.replace(photo, os.path.join(B_DIR, "photos", name))
-        rec["photo"] = "photos/" + name
-    b_records.append(rec)
+def b_write_index():
     tmp = os.path.join(B_DIR, "index.tmp")
     json.dump({"device": "pi-blackbox", "records": b_records[-200:]}, open(tmp, "w"))
     os.replace(tmp, os.path.join(B_DIR, "index.json"))
+
+
+def b_save(ev, t_event):
+    """B형: 기록을 파이 안에만 저장하고 index.json 갱신 (블랙박스 SD카드처럼)"""
+    os.makedirs(os.path.join(B_DIR, "photos"), exist_ok=True)
+    if not b_records and os.path.exists(os.path.join(B_DIR, "index.json")):   # 껐다 켜도 번호 이어서
+        try:
+            b_records.extend(json.load(open(os.path.join(B_DIR, "index.json"))).get("records", []))
+        except Exception:
+            pass
+    t_ms = int(t_event * 1000)
+    rec = {"id": (b_records[-1]["id"] + 1) if b_records else 1, "t_ms": t_ms,
+           "photo_ms": t_ms - int(ev.photo_back_ms), "score": round(ev.score_mg / 1000, 3),
+           "speed_kmh": ev.speed_kmh, "photo": None, "video": None, "video_start_ms": None, "video_end_ms": None}
+    name = f"{rec['id']:05d}"
+    jpg = stream.grab(t_event - ev.photo_back_ms / 1000) if stream else None   # S23 영상에서 충격 직전 장면
+    if jpg:
+        open(os.path.join(B_DIR, "photos", name + ".jpg"), "wb").write(jpg)
+        rec["photo"] = f"photos/{name}.jpg"
+    else:
+        photo, _ = take_photo(t_event)             # 예전방식 (IP Webcam/샘플)
+        if photo:
+            os.replace(photo, os.path.join(B_DIR, "photos", name + ".jpg"))
+            rec["photo"] = f"photos/{name}.jpg"
+    b_records.append(rec)
+    b_write_index()
+    if stream:                                     # 앞뒤 10초 영상 → clips/ (10초 뒤에 index 갱신)
+        def done(info, rec=rec, name=name):
+            if info:
+                rec.update(video=f"clips/{name}.mp4", video_start_ms=info["start_ms"], video_end_ms=info["end_ms"])
+                b_write_index()
+        stream.save_clip(t_event, os.path.join(B_DIR, "clips", name + ".mp4"), done=done)
     print(f"\n★ 충격 {rec['score']:.2f}g → 파이 안에 저장 (#{rec['id']}). 폰이 와이파이로 가져갈 거예요")
 
 
@@ -384,7 +467,7 @@ def on_event(ev, t_event, loc=None):
         row = upload(jpg, lat, lon, impact=round(ev.score_mg / 1000, 3), label=label, conf=conf,
                      title="블랙박스 자동감지 (A형 시뮬)")
         print("    업로드 ✓ " + row["image_url"] if row else "    업로드 실패 → pending_uploads 에 보관")
-        return
+        return label, conf
     print("    S23 연결 안됨 → 예전방식(사진없이)")
     photo, psrc = take_photo(t_event)
     img_url = sb_upload_image(photo) if photo else None
@@ -433,7 +516,7 @@ def run_key():
 # ---------------- 모드3: 진짜 ADXL345 센서 (04_충격감지_SDK_C/examples/pi_adxl.py 방식) ----------------
 def run_sensor():
     global stream
-    if not (PHONE_MODE or SERVE_MODE):
+    if not PHONE_MODE:                           # A형·B형 둘 다 S23 영상 (사진 + 앞뒤 10초 클립)
         stream = ScreenStream()
     from smbus2 import SMBus
     ADDR = 0x53
@@ -455,23 +538,84 @@ def run_sensor():
         yolo_check(cv2.imencode(".jpg", np.zeros((64, 64, 3), np.uint8))[1].tobytes())
     busy = threading.Event()
 
+    # ---- 실차 기록 (calibrate.py normal 이랑 같은 형식) → drives/날짜_시각/ ----
+    import csv
+    from collections import deque
+    rec_dir = os.path.join(HERE, "drives", datetime.now().strftime("%Y%m%d_%H%M"))
+    os.makedirs(rec_dir, exist_ok=True)
+    marks, events = [], []
+    start = time.time()
+
+    def save_json(name, data):
+        tmp = os.path.join(rec_dir, name + ".tmp")
+        json.dump(data, open(tmp, "w"), ensure_ascii=False, indent=1)
+        os.replace(tmp, os.path.join(rec_dir, name))
+
+    def mark_loop():                             # Enter = 방지턱/포트홀 지남 표시
+        for _ in sys.stdin:
+            marks.append(round(time.time() - start, 3))
+            save_json("calib_normal_marks.json", marks)     # 누를때마다 바로 저장
+            print(f"\n  [표시 {len(marks)}] {marks[-1]:.1f}초", flush=True)
+    threading.Thread(target=mark_loop, daemon=True).start()
+
     def handle(ev, t):
+        e = {"t": round(t - start, 3), "score": round(ev.score_mg / 1000, 3)}
+        if stream and not SERVE_MODE:            # A형: 앞뒤 10초 영상은 기록폴더 clips/ 에 (B형은 b_save 가 함)
+            clip = os.path.join(rec_dir, "clips", f"{int(e['t'] * 1000):08d}.mp4")
+
+            def done(info, e=e, clip=clip):
+                if info:
+                    e["video"] = os.path.relpath(clip, rec_dir)
+                    e["video_before_s"], e["video_after_s"] = info["before_s"], info["after_s"]
+                    save_json("events.json", events)
+            stream.save_clip(t, clip, done=done)
         try:
-            on_event(ev, t)
+            res = on_event(ev, t)
+            if res:
+                e["label"], e["conf"] = res
         finally:
+            events.append(e)
+            save_json("events.json", events)
             busy.clear()
 
-    print(f"ADXL345 센서로 감지중 (기준 {THRESHOLD_MG/1000:.2f}g). 센서 톡 쳐보기 (끝: Ctrl+C)")
+    print(f"ADXL345 센서로 감지중 (기준 {THRESHOLD_MG/1000:.2f}g). 끝: Ctrl+C")
+    print(f"  기록: {os.path.relpath(rec_dir, HERE)}/  방지턱·포트홀 지날때 Enter → 표시", flush=True)
+    win = deque()
+    f = open(os.path.join(rec_dir, "calib_normal.csv"), "w", newline="")
+    w = csv.writer(f)
+    w.writerow(["t", "x", "y", "z", "score", "kmh", "lat", "lon"])
     t0 = time.monotonic()
-    while True:
-        r, ev = d.feed(int((time.monotonic() - t0) * 1000), *read_mg())
-        if r == pothole.EVENT:
-            if busy.is_set():
-                print("\n  (앞 충격 사진/업로드 처리중이라 이번건 건너뜀)")
-            else:
-                busy.set()
-                threading.Thread(target=handle, args=(ev, time.time()), daemon=True).start()  # 센서읽기 안밀리게
-        time.sleep(0.0015)
+    n = 0
+    try:
+        while True:
+            x, y, z = read_mg()
+            t = time.time() - start
+            gx, gy, gz = x / 1000, y / 1000, z / 1000
+            win.append((t, abs(math.sqrt(gx * gx + gy * gy + gz * gz) - 1.0)))
+            while t - win[0][0] > 0.05:          # calibrate.py WINDOW 0.05초랑 같게
+                win.popleft()
+            w.writerow([f"{t:.4f}", f"{gx:.3f}", f"{gy:.3f}", f"{gz:.3f}",
+                        f"{sum(s for _, s in win) / len(win):.4f}", "", "", ""])
+            n += 1
+            if n % 400 == 0:
+                f.flush()                        # 꺼져도 그때까지는 남게
+            r, ev = d.feed(int((time.monotonic() - t0) * 1000), x, y, z)
+            if r == pothole.EVENT:
+                if busy.is_set():
+                    events.append({"t": round(time.time() - start, 3), "score": round(ev.score_mg / 1000, 3),
+                                   "skipped": True})
+                    print("\n  (앞 충격 사진/업로드 처리중이라 이번건 건너뜀)")
+                else:
+                    busy.set()
+                    threading.Thread(target=handle, args=(ev, time.time()), daemon=True).start()  # 센서읽기 안밀리게
+            time.sleep(0.0015)
+    finally:
+        f.close()
+        save_json("calib_normal_marks.json", marks)
+        save_json("events.json", events)
+        dur = time.time() - start
+        print(f"\n기록 저장: {os.path.relpath(rec_dir, HERE)}/ ({dur:.0f}초, {n}개, 1초에 약 {n / max(dur, 1):.0f}번, "
+              f"표시 {len(marks)}개, 감지 {len(events)}개)")
 
 
 # ---------------- 모드2: 기록된 실차 데이터 다시 흘리기 ----------------

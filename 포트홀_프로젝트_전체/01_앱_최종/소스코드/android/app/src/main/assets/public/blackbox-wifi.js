@@ -38,6 +38,14 @@
     return response;
   }
 
+  function base64ToBlob(data, type) {
+    const binary = root.atob(data);
+    // Avoid Uint8Array.from's intermediate array for multi-megabyte clips.
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type });
+  }
+
   const api = {
     register: (ssid, password) => native().register({ ssid, password }),
     connect: () => native().connect(),
@@ -67,8 +75,16 @@
     },
     async getPhotoBlob(path) {
       const photo = await api.getPhoto(path);
-      const bytes = Uint8Array.from(root.atob(photo.data), (c) => c.charCodeAt(0));
-      return new Blob([bytes], { type: photo.contentType });
+      return base64ToBlob(photo.data, photo.contentType);
+    },
+    async getVideoBlob(path) {
+      // Accept only a single ASCII filename; never normalize URLs or traversal paths.
+      if (typeof path !== 'string' || !/^\/clips\/[A-Za-z0-9_-]+\.mp4$/.test(path)) {
+        throw new Error('영상 파일 주소는 /clips/<영문·숫자·밑줄·하이픈 파일명>.mp4 형식이어야 합니다.');
+      }
+      const response = requireSuccess(await get(path, true));
+      // Android enforces 8 MiB on raw bytes before Base64 encoding (1–5 MB clips fit).
+      return base64ToBlob(response.data, 'video/mp4');
     },
     currentPosition() {
       return new Promise((resolve, reject) => {

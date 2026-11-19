@@ -1,10 +1,10 @@
 {
   "name": "potholeapp",
-  "version": "1.0.0",
+  "version": "1.0.9-test",
   "description": "",
   "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/blackbox/*.test.cjs"
   },
   "keywords": [],
   "author": "",
@@ -12,9 +12,12 @@
   "type": "commonjs",
   "dependencies": {
     "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/browser": "^8.0.5",
     "@capacitor/core": "^8.6.0"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.6.0"
+    "@capacitor/cli": "^8.6.0",
+    "fake-indexeddb": "6.2.8"
   }
 }

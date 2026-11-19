@@ -11,7 +11,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="포트홀 알리미">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="style.css?v=36">
+  <link rel="stylesheet" href="style.css?v=38">
   <!-- Supabase -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- 카카오 지도 API -->
@@ -198,6 +198,17 @@
     <div id="result" style="display: none;"></div>
 
     <div id="checklist-section"></div>
+
+    <!-- 💡 내 블랙박스 영상 (체크리스트 바로 아래, 본인 영상만 보임) — report-videos.js -->
+    <div id="report-videos-section">
+      <hr class="divider" style="margin: 30px 0 25px 0;">
+      <h2 style="margin: 0 0 20px 0; padding: 0 5px; font-size: 25px; font-weight: bold; color: #111; text-align: left;">내 블랙박스 영상</h2>
+      <div id="report-videos-login" class="center" style="display: none; padding: 10px 0 20px;">
+        <p class="sub" style="margin-bottom: 15px; font-size: 14px; color: #666;">로그인하면 내 블랙박스 영상을 볼 수 있어요</p>
+        <button class="btn btn-kakao btn-block" style="padding: 14px; border-radius: 12px; font-size: 16px;" onclick="loginWithKakao()">카카오 로그인</button>
+      </div>
+      <div id="report-video-list"></div>
+    </div>
   </section>
   <!-- ===================== 6. 내정보 ===================== -->
   <section id="mypage-view" class="view page" style="background-color: white;">
@@ -205,20 +216,43 @@
     
     <div id="nearby-alert-panel" class="card">
       <h3 style="margin-top:0;">주변 포트홀 안내</h3>
-      <p>현재 위치 근처에 등록된 포트홀이 있으면 알림과 음성으로 알려드립니다.</p>
+      <p>GPS 진행 방향 앞쪽 ±30도 안의 포트홀을 알림과 음성으로 알려드립니다.</p>
       <label for="nearby-radius">안내 거리</label>
       <select id="nearby-radius" style="padding:10px; margin:8px;">
-        <option value="100">100m</option><option value="200" selected>200m</option>
-        <option value="300">300m</option><option value="500">500m</option><option value="1000">1km</option>
+        <option value="100">100m</option><option value="200">200m</option>
+        <option value="300" selected>300m</option><option value="500">500m</option><option value="1000">1km</option>
       </select>
       <label style="display:block; margin:12px 0;"><input id="nearby-voice" type="checkbox" checked style="width:auto;"> 음성 안내 켜기</label>
+      <label style="display:block; margin:12px 0;"><input id="nearby-upload" type="checkbox" style="width:auto;"> 운행 중 내 위치 서버에 올리기 (블랙박스 위치 맞추기용, 2초마다)</label>
       <div class="btn-group" style="gap:8px;">
         <button id="nearby-start" class="btn">안내 시작</button>
         <button id="nearby-stop" class="btn btn-gray">안내 중지</button>
       </div>
       <p id="nearby-state" role="status" aria-live="polite">안내 상태 확인 중…</p>
       <p class="sub">안내를 시작하면 화면을 꺼도 위치를 확인합니다. 상단 알림의 ‘안내 중지’로도 끌 수 있습니다. 모바일 데이터와 위치 기능을 켜 두세요.</p>
-      <p class="sub">주변 반경 기준으로 안내하며 진행 방향·도로는 구분하지 않습니다. 같은 포트홀은 10분 동안 반복 안내하지 않습니다. 무음·방해금지 설정은 유지됩니다.</p>
+      <p class="sub">설정 거리 안에서 300m·100m·50m 구간 진입 시 한 번씩 안내합니다. 안내를 중지하기 전까지 같은 구간은 반복하지 않습니다. 정지 중이거나 GPS 방향이 불확실하면 안내하지 않습니다. 차선·도로는 구분하지 않으며 무음·방해금지 설정을 유지합니다.</p>
+    </div>
+
+    <div id="detection-alerts-panel" class="card">
+      <h3>새 포트홀 감지 알림</h3>
+      <p>현재 위치 1km 안에서 새 포트홀이 등록되면 알려드립니다. 알림을 누르면 지도로 이동합니다.</p>
+      <button id="detection-start" class="btn">새 감지 알림 시작</button>
+      <button id="detection-stop" class="btn btn-gray">중지</button>
+      <p id="detection-state" role="status">새 감지 알림이 꺼져 있습니다.</p>
+      <p class="sub">앱의 실시간 연결이 유지되는 동안 동작합니다. 앱 종료·절전 상태에서는 수신이 보장되지 않습니다.</p>
+    </div>
+
+    <div id="private-videos-panel" class="card">
+      <h3>블랙박스 영상 가져오기</h3>
+      <p>블랙박스에 연결한 뒤 영상을 가져오세요. 로그인 전에는 폰에 보관하고, 로그인하면 내 계정으로 업로드합니다. 올린 영상은 <b>신고 화면 아래 ‘내 블랙박스 영상’</b>에서 볼 수 있어요.</p>
+      <p class="sub">영상 위치는 충격 시각의 GPS 기록으로 맞춥니다(±2초, 정확도 30m 이내). 운행 전에 ‘운행 중 내 위치 서버에 올리기’를 켜고 안내를 시작하세요. 폰에 GPS 기록을 7일간 보관합니다. 해당 기록이 없으면 영상을 폰에 보관하고 업로드를 보류합니다. 파이와 폰의 시각이 맞아야 합니다.</p>
+      <p class="sub">기록의 clips/파일명.mp4에는 앞의 /를 자동으로 붙입니다. 서버 저장 경로는 내 사용자 ID/기기_충격시각.mp4입니다.</p>
+      <button id="video-import" class="btn">블랙박스 영상 가져오기</button>
+      <button id="video-sync" class="btn btn-gray">보관 영상 업로드 재시도</button>
+      <p id="video-pending" role="status"></p>
+      <p id="video-state" role="status" aria-live="polite">로그인하면 내 블랙박스 영상을 볼 수 있어요.</p>
+      <button id="video-login" class="btn">카카오 로그인</button>
+      <button class="btn btn-gray" onclick="go('report')">내 영상 보러 가기</button>
     </div>
 
     <div id="blackbox-panel" class="card">
@@ -306,9 +340,24 @@
   </nav>
 
   <!-- 필수 스크립트 연결 -->
-  <script src="nearby-alerts.js?v=1"></script>
+  <script src="nearby-alerts.js?v=2"></script>
   <script src="blackbox-wifi.js?v=1"></script>
-  <script src="app.js?v=20261117"></script>
+  <script src="app.js?v=20261119"></script>
+  <script src="native-auth.js?v=20261119"></script>
+  <script src="private-videos-core.js?v=20261119"></script>
+  <script src="private-videos.js?v=20261119"></script>
+  <script src="detection-alerts.js?v=20261119"></script>
+  <script src="report-videos.js?v=20261119"></script>
+  <script>
+    // 💡 웹사이트(브라우저)에서는 폰 앱 전용 기능(블랙박스 와이파이·백그라운드 안내·폰 알림·영상 가져오기)을 숨김
+    (function () {
+      var native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      if (native) return;
+      ['nearby-alert-panel', 'detection-alerts-panel', 'private-videos-panel', 'blackbox-panel'].forEach(function (id) {
+        var el = document.getElementById(id); if (el) el.hidden = true;
+      });
+    })();
+  </script>
 
   <!-- 지도 신고하기 버튼 동작 -->
   <script>

@@ -45,6 +45,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- 카카오 로그인 후 앱으로 돌아오기 (Supabase Redirect URLs 에도 등록 필요) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.gimmegimme.pothole" android:host="login-callback" />
+            </intent-filter>
+
         </activity>
 
         <service android:name=".NearbyAlertService" android:exported="false"
